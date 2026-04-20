@@ -6,8 +6,8 @@ import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ── CONFIG ─────────────────────────────────────────────────────────────────
-const SUPABASE_URL = "https://zkesnhhduxtxinjdkbyn.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InprZXNuaGhkdXh0eGluamRrYnluIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NDI3OTgsImV4cCI6MjA5MjIxODc5OH0.6yG-4vONpCxi8k_kZm4vIAtUJIV8yxk6PtcKMJKK1Ho";
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
 const COACH_PASSWORD = "sleep2024"; // Change this via Settings inside the app
 const DEFAULT_SUPPORT_DAYS = 28;
 const DEFAULT_CONTACT_EVERY = 7;
@@ -190,16 +190,21 @@ const daysBetween = (a, b) =>
   Math.floor((new Date(b) - new Date(a)) / 86400000);
 
 // ── INTAKE QUESTIONS ───────────────────────────────────────────────────────
+const PRONOUNS = ["She/her", "They/them", "He/him", "Prefer not to say"];
+
 const INTAKE_SECTIONS = [
   {
     title: "About You",
     fields: [
       { key: "parent_name", label: "Your name", type: "text" },
+      { key: "parent_pronouns", label: "Your preferred pronouns", type: "select", options: PRONOUNS },
       { key: "parent_email", label: "Your email address", type: "email" },
       { key: "partner_name", label: "Partner's name (if applicable)", type: "text" },
+      { key: "partner_pronouns", label: "Partner's preferred pronouns (if applicable)", type: "select", options: PRONOUNS },
       { key: "child_name", label: "Child's name", type: "text" },
       { key: "child_dob", label: "Child's date of birth", type: "date" },
       { key: "child_age_weeks", label: "Child's corrected age (if premature, in weeks)", type: "text" },
+      { key: "siblings", label: "Name and age/s of sibling/s (if applicable)", type: "text" },
     ],
   },
   {
@@ -208,7 +213,9 @@ const INTAKE_SECTIONS = [
       { key: "birth_type", label: "How was your baby born? (vaginal/caesarean)", type: "text" },
       { key: "birth_weight", label: "Birth weight", type: "text" },
       { key: "health_conditions", label: "Any diagnosed health conditions or medical history relevant to sleep (e.g. reflux, tongue tie, allergies)?", type: "textarea" },
-      { key: "medications", label: "Any current medications?", type: "text" },
+      { key: "medications", label: "Is your child taking any prescribed, over the counter, herbal or naturopathic medicines, vitamins or supplements?", type: "textarea" },
+      { key: "weight_concerns", label: "Are there any concerns about your child's weight?", type: "textarea" },
+      { key: "other_practitioners", label: "Is your child currently seeing any other health care professional or alternative/complementary therapist? Please specify:", type: "textarea" },
       { key: "health_notes", label: "Any other health information you'd like me to know?", type: "textarea" },
     ],
   },
@@ -219,20 +226,23 @@ const INTAKE_SECTIONS = [
       { key: "sleep_associations", label: "What does your child need to fall asleep? (e.g. feeding, rocking, dummy, contact)", type: "textarea" },
       { key: "typical_bedtime", label: "What time does your child usually go to bed?", type: "text" },
       { key: "typical_wake_time", label: "What time does your child usually wake for the day?", type: "text" },
-      { key: "night_wakings", label: "How many times does your child wake overnight, and how long are they awake?", type: "textarea" },
+      { key: "night_wakings", label: "On an average night, how many times does your child wake overnight, and how long are they awake?", type: "textarea" },
       { key: "nap_number", label: "How many naps per day?", type: "text" },
-      { key: "nap_details", label: "Describe a typical nap (timing, duration, location, how they fall asleep)", type: "textarea" },
+      { key: "nap_details", label: "Describe a typical nap (duration, location, how they fall asleep)", type: "textarea" },
       { key: "wake_window", label: "What is your child's typical wake window before becoming tired?", type: "text" },
       { key: "tired_cues", label: "What tired cues does your child show?", type: "textarea" },
+      { key: "sleep_problem_overview", label: "Please give a brief overview of your child's sleep problem/issue and what methods (if any) you have tried so far to alleviate this.", type: "textarea" },
+      { key: "daytime_temperament", label: "What is your child's temperament usually like during the day?", type: "textarea" },
     ],
   },
   {
     title: "Feeding",
     fields: [
-      { key: "feeding_type", label: "How is your child currently fed? (breastfed / formula / solids / combination)", type: "text" },
+      { key: "feeding_type", label: "How is your child currently fed? (breastfed / expressed / formula / solids / combination)", type: "text" },
+      { key: "meal_times", label: "What are your child's approximate meal/feed times in 24 hours?", type: "textarea" },
       { key: "night_feeds", label: "Does your child feed overnight? How often and how long?", type: "textarea" },
       { key: "feed_to_sleep", label: "Does your child feed to sleep?", type: "text" },
-      { key: "solids_started", label: "Have solids been introduced? If so, what stage?", type: "text" },
+      { key: "solids_started", label: "Have solids been introduced? If so, how are they with eating (amount/variation/enjoy or dislike meal times etc.)?", type: "textarea" },
       { key: "feeding_concerns", label: "Any feeding concerns or difficulties?", type: "textarea" },
     ],
   },
@@ -240,9 +250,9 @@ const INTAKE_SECTIONS = [
     title: "Your Concerns & Goals",
     fields: [
       { key: "main_concerns", label: "What are your main sleep concerns?", type: "textarea" },
+      { key: "family_impact", label: "Explain how the problem/issue affects you, your child and the rest of the family.", type: "textarea" },
       { key: "what_tried", label: "What approaches have you already tried?", type: "textarea" },
       { key: "goals", label: "What does success look like for you? What are your sleep goals?", type: "textarea" },
-      { key: "comfort_level", label: "How do you feel about responding to your child's cries? (e.g. no crying, minimal, some is okay)", type: "textarea" },
       { key: "anything_else", label: "Is there anything else you'd like me to know before we start?", type: "textarea" },
     ],
   },
@@ -986,6 +996,17 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
               value={responses[f.key] || ""}
               onChange={(e) => set(f.key, e.target.value)}
             />
+          ) : f.type === "select" ? (
+            <select
+              style={{ ...gStyle.input, cursor: "pointer" }}
+              value={responses[f.key] || ""}
+              onChange={(e) => set(f.key, e.target.value)}
+            >
+              <option value="">Select...</option>
+              {f.options.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
           ) : (
             <input
               type={f.type}
