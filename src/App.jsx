@@ -6,8 +6,8 @@ import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ── CONFIG ─────────────────────────────────────────────────────────────────
-const SUPABASE_URL = "YOUR_SUPABASE_URL";
-const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+const SUPABASE_URL = "https://qbucjbharcquwirhetcv.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFidWNqYmhhcmNxdXdpcmhldGN2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1MDU1MTIsImV4cCI6MjA5MjA4MTUxMn0.iWb02j6xeyj5zg192J1ATmaLs4L7_bqJGuIWrIPae9E;
 const COACH_PASSWORD = "sleep2024"; // Change this via Settings inside the app
 const DEFAULT_SUPPORT_DAYS = 28;
 const DEFAULT_CONTACT_EVERY = 7;
