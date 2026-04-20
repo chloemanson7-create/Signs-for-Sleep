@@ -7,7 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 
 // ── CONFIG ─────────────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://qbucjbharcquwirhetcv.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFidWNqYmhhcmNxdXdpcmhldGN2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1MDU1MTIsImV4cCI6MjA5MjA4MTUxMn0.iWb02j6xeyj5zg192J1ATmaLs4L7_bqJGuIWrIPae9E";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InprZXNuaGhkdXh0eGluamRrYnluIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NDI3OTgsImV4cCI6MjA5MjIxODc5OH0.6yG-4vONpCxi8k_kZm4vIAtUJIV8yxk6PtcKMJKK1Ho";
 const COACH_PASSWORD = "sleep2024"; // Change this via Settings inside the app
 const DEFAULT_SUPPORT_DAYS = 28;
 const DEFAULT_CONTACT_EVERY = 7;
@@ -640,7 +640,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
       {tab === "intake" && <IntakeViewer clientId={client.id} />}
       {tab === "diary" && <SleepDiaryViewer clientId={client.id} isCoach />}
       {tab === "notes" && <CoachNotes clientId={client.id} />}
-      {tab === "settings" && <ClientSettings client={clientData} onRefresh={refresh} />}
+      {tab === "settings" && <ClientSettings client={clientData} onRefresh={refresh} onDelete={onBack} />}
     </>
   );
 }
@@ -662,6 +662,11 @@ function ClientOverview({ client, onRefresh }) {
 
   const closeClient = async () => {
     await supabase.from("clients").update({ status: "closed" }).eq("id", client.id);
+    onRefresh();
+  };
+
+  const reopenClient = async () => {
+    await supabase.from("clients").update({ status: "active", support_start_date: today() }).eq("id", client.id);
     onRefresh();
   };
 
@@ -705,9 +710,13 @@ function ClientOverview({ client, onRefresh }) {
       )}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button style={{ ...gStyle.btnGold, flex: 1 }} onClick={markContacted}>✓ Mark as contacted today</button>
         {client.status === "active" && (
+          <button style={{ ...gStyle.btnGold, flex: 1 }} onClick={markContacted}>✓ Mark as contacted today</button>
+        )}
+        {client.status === "active" ? (
           <button style={{ ...gStyle.btnDanger, flex: 1 }} onClick={closeClient}>Close support period</button>
+        ) : (
+          <button style={{ ...gStyle.btnGold, flex: 1 }} onClick={reopenClient}>↩ Reopen as active client</button>
         )}
       </div>
     </div>
@@ -784,13 +793,14 @@ function CoachNotes({ clientId }) {
   );
 }
 
-function ClientSettings({ client, onRefresh }) {
+function ClientSettings({ client, onRefresh, onDelete }) {
   const [supportDays, setSupportDays] = useState(client.support_days || DEFAULT_SUPPORT_DAYS);
   const [contactEvery, setContactEvery] = useState(client.contact_every_days || DEFAULT_CONTACT_EVERY);
   const [code, setCode] = useState(client.access_code);
   const [startDate, setStartDate] = useState(client.support_start_date || today());
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const save = async () => {
     setSaving(true);
@@ -806,31 +816,64 @@ function ClientSettings({ client, onRefresh }) {
     onRefresh();
   };
 
+  const deleteClient = async () => {
+    await supabase.from("clients").delete().eq("id", client.id);
+    onDelete();
+  };
+
   return (
-    <div style={gStyle.card}>
-      <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 20px" }}>Client Settings</h3>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-        <div>
-          <label style={gStyle.label}>Access code</label>
-          <input style={gStyle.input} value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
+    <div>
+      <div style={gStyle.card}>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 20px" }}>Client Settings</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+          <div>
+            <label style={gStyle.label}>Access code</label>
+            <input style={gStyle.input} value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
+          </div>
+          <div>
+            <label style={gStyle.label}>Support start date</label>
+            <input style={gStyle.input} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </div>
+          <div>
+            <label style={gStyle.label}>Support period (days)</label>
+            <input style={gStyle.input} type="number" value={supportDays} onChange={(e) => setSupportDays(e.target.value)} />
+          </div>
+          <div>
+            <label style={gStyle.label}>Contact reminder every (days)</label>
+            <input style={gStyle.input} type="number" value={contactEvery} onChange={(e) => setContactEvery(e.target.value)} />
+          </div>
         </div>
-        <div>
-          <label style={gStyle.label}>Support start date</label>
-          <input style={gStyle.input} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-        </div>
-        <div>
-          <label style={gStyle.label}>Support period (days)</label>
-          <input style={gStyle.input} type="number" value={supportDays} onChange={(e) => setSupportDays(e.target.value)} />
-        </div>
-        <div>
-          <label style={gStyle.label}>Contact reminder every (days)</label>
-          <input style={gStyle.input} type="number" value={contactEvery} onChange={(e) => setContactEvery(e.target.value)} />
-        </div>
+        {msg && <p style={{ color: C.success, fontSize: 13, marginBottom: 8 }}>{msg}</p>}
+        <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={save} disabled={saving}>
+          {saving ? "Saving…" : "Save Changes"}
+        </button>
       </div>
-      {msg && <p style={{ color: C.success, fontSize: 13, marginBottom: 8 }}>{msg}</p>}
-      <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={save} disabled={saving}>
-        {saving ? "Saving…" : "Save Changes"}
-      </button>
+
+      <div style={{ ...gStyle.card, borderColor: C.danger }}>
+        <h3 style={{ fontFamily: font.display, color: C.danger, margin: "0 0 8px" }}>Danger Zone</h3>
+        <p style={{ fontSize: 13, color: C.mid, marginBottom: 16 }}>
+          Permanently deletes this client and all their data including intake responses, sleep diary entries and coaching notes. This cannot be undone.
+        </p>
+        {!confirmDelete ? (
+          <button style={gStyle.btnDanger} onClick={() => setConfirmDelete(true)}>
+            Delete client permanently
+          </button>
+        ) : (
+          <div>
+            <p style={{ fontSize: 13, fontWeight: 700, color: C.danger, marginBottom: 12 }}>
+              Are you sure? This will delete everything for {client.name}.
+            </p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={{ ...gStyle.btnDanger, flex: 1 }} onClick={deleteClient}>
+                Yes, delete permanently
+              </button>
+              <button style={{ ...gStyle.btnSecondary, flex: 1 }} onClick={() => setConfirmDelete(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
