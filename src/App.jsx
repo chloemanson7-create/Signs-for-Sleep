@@ -1084,9 +1084,12 @@ function SleepDiaryViewer({ clientId, isCoach }) {
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
 
-  const emptyNap = () => ({ start: "", end: "", notes: "" });
+  const emptyNap = () => ({ start: "", end: "", how_fell_asleep: "", location: "", resettled: "", notes: "" });
   const emptyEntry = () => ({
     wake_time: "", bed_time: "", notes: "",
+    routine_start_time: "", into_bed_time: "", asleep_time: "",
+    night_wakings_count: "", night_wakings_notes: "",
+    daytime_notes: "",
     naps: [emptyNap()],
   });
 
@@ -1223,7 +1226,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
                   ⏱ Wake window: {fmtDuration(ww ?? wwFromPrev)} {idx === 0 ? "since wake" : "since last nap"}
                 </p>
               )}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <div>
                   <label style={gStyle.label}>Start</label>
                   <input type="time" style={gStyle.input} value={nap.start || ""}
@@ -1235,12 +1238,43 @@ function SleepDiaryViewer({ clientId, isCoach }) {
                     onChange={(e) => updateNap(idx, "end", e.target.value)} disabled={isCoach} />
                 </div>
               </div>
-              <label style={gStyle.label}>Notes</label>
-              <input style={gStyle.input} value={nap.notes || ""} placeholder="How they fell asleep, resettled, etc."
-                onChange={(e) => updateNap(idx, "notes", e.target.value)} disabled={isCoach} />
+              <div style={{ marginBottom: 10 }}>
+                <label style={gStyle.label}>How did they fall asleep?</label>
+                <input style={gStyle.input} value={nap.how_fell_asleep || ""}
+                  placeholder="e.g. fed to sleep, rocked, independently, with dummy..."
+                  onChange={(e) => updateNap(idx, "how_fell_asleep", e.target.value)} disabled={isCoach} />
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <label style={gStyle.label}>Where did they nap?</label>
+                <input style={gStyle.input} value={nap.location || ""}
+                  placeholder="e.g. cot, pram, carrier, car, arms..."
+                  onChange={(e) => updateNap(idx, "location", e.target.value)} disabled={isCoach} />
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <label style={gStyle.label}>Did they need to be resettled?</label>
+                <input style={gStyle.input} value={nap.resettled || ""}
+                  placeholder="e.g. no, once after 30 min, multiple times..."
+                  onChange={(e) => updateNap(idx, "resettled", e.target.value)} disabled={isCoach} />
+              </div>
+              <div>
+                <label style={gStyle.label}>Additional nap notes</label>
+                <textarea style={{ ...gStyle.input, minHeight: 60, resize: "vertical" }} value={nap.notes || ""}
+                  placeholder="Anything else to note about this nap..."
+                  onChange={(e) => updateNap(idx, "notes", e.target.value)} disabled={isCoach} />
+              </div>
             </div>
           );
         })}
+      </div>
+
+      {/* Daytime behaviour */}
+      <div style={gStyle.card}>
+        <h3 style={{ fontFamily: font.display, color: C.blue, margin: "0 0 8px" }}>Daytime Behaviour & Activities</h3>
+        <p style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>e.g. nursery/kindy, home all day, multiple meltdowns, good mood, teething, unwell...</p>
+        <textarea style={{ ...gStyle.input, minHeight: 80, resize: "vertical" }}
+          value={entry.daytime_notes || ""}
+          placeholder="Notes about the day..."
+          onChange={(e) => update("daytime_notes", e.target.value)} disabled={isCoach} />
       </div>
 
       {/* Bedtime */}
@@ -1253,19 +1287,51 @@ function SleepDiaryViewer({ clientId, isCoach }) {
           const wwFromWake = !lastNapEnd && entry.wake_time && entry.bed_time
             ? diffMins(parseTime(entry.wake_time), parseTime(entry.bed_time)) : null;
           return (wwToBed || wwFromWake) ? (
-            <p style={{ fontSize: 12, color: C.gold, marginBottom: 8 }}>
+            <p style={{ fontSize: 12, color: C.gold, marginBottom: 12 }}>
               ⏱ Wake window to bed: {fmtDuration(wwToBed ?? wwFromWake)}
             </p>
           ) : null;
         })()}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+          <div>
+            <label style={gStyle.label}>Bedtime routine started</label>
+            <input type="time" style={gStyle.input} value={entry.routine_start_time || ""}
+              onChange={(e) => update("routine_start_time", e.target.value)} disabled={isCoach} />
+          </div>
+          <div>
+            <label style={gStyle.label}>Time into bed</label>
+            <input type="time" style={gStyle.input} value={entry.into_bed_time || ""}
+              onChange={(e) => update("into_bed_time", e.target.value)} disabled={isCoach} />
+          </div>
+        </div>
         <div style={{ marginBottom: 12 }}>
-          <label style={gStyle.label}>Bedtime</label>
+          <label style={gStyle.label}>Time went to sleep</label>
           <input type="time" style={gStyle.input} value={entry.bed_time || ""}
             onChange={(e) => update("bed_time", e.target.value)} disabled={isCoach} />
         </div>
-        <label style={gStyle.label}>Notes for the day</label>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginBottom: 12 }}>
+          <div>
+            <label style={gStyle.label}>Times woke overnight</label>
+            <select style={{ ...gStyle.input, cursor: "pointer" }}
+              value={entry.night_wakings_count || ""}
+              onChange={(e) => update("night_wakings_count", e.target.value)}
+              disabled={isCoach}>
+              <option value="">—</option>
+              {Array.from({ length: 26 }, (_, i) => (
+                <option key={i} value={i}>{i}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={gStyle.label}>Night waking notes</label>
+            <input style={gStyle.input} value={entry.night_wakings_notes || ""}
+              placeholder="e.g. awake 2am for 45 min, resettled with feed..."
+              onChange={(e) => update("night_wakings_notes", e.target.value)} disabled={isCoach} />
+          </div>
+        </div>
+        <label style={gStyle.label}>General notes</label>
         <textarea style={{ ...gStyle.input, minHeight: 80, resize: "vertical" }}
-          placeholder="How was settling? Any unusual wake-ups? Anything to note..."
+          placeholder="How was settling? Anything else to note..."
           value={entry.notes || ""}
           onChange={(e) => update("notes", e.target.value)} disabled={isCoach} />
       </div>
