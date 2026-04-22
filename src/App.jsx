@@ -448,20 +448,20 @@ function LoginScreen({ onLogin }) {
       {/* Scattered gold stars */}
       {STARS.map((s, i) => <GoldStar key={i} {...s} />)}
 
-      <div style={{ width: "100%", maxWidth: 560, position: "relative", zIndex: 1, textAlign: "center" }}>
+      <div style={{ width: "100%", maxWidth: 700, position: "relative", zIndex: 1, textAlign: "center" }}>
 
-        {/* Logo — large, centred */}
-        <div style={{ marginBottom: 24 }}>
+        {/* Logo — doubled in size, equidistant from divider */}
+        <div style={{ marginBottom: 32 }}>
           <img
             src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
             alt="Signs for Sleep"
-            style={{ maxWidth: 520, width: "100%", height: "auto" }}
+            style={{ maxWidth: 680, width: "100%", height: "auto" }}
             onError={(e) => { e.target.style.display = "none"; }}
           />
         </div>
 
-        {/* Thin gold divider — full width to match logo */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 28, maxWidth: 520, margin: "0 auto 28px" }}>
+        {/* Thin gold divider */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, maxWidth: 680, margin: "0 auto 32px" }}>
           <div style={{ flex: 1, height: "0.5px", background: C.gold, opacity: 0.6 }} />
           <svg width="10" height="10" viewBox="0 0 20 20" fill="none">
             <path d="M10 0 L11.2 8.8 L20 10 L11.2 11.2 L10 20 L8.8 11.2 L0 10 L8.8 8.8 Z" fill="#C9A84C" opacity="0.8"/>
@@ -471,7 +471,7 @@ function LoginScreen({ onLogin }) {
 
         {/* Login area */}
         <div>
-          <p style={{ fontSize: 13, color: C.mid, marginBottom: 20, lineHeight: 1.7, letterSpacing: "0.01em" }}>
+          <p style={{ fontSize: 13, color: C.mid, marginBottom: 32, lineHeight: 1.7, letterSpacing: "0.01em" }}>
             Enter the access code provided by your sleep consultant.
           </p>
 
