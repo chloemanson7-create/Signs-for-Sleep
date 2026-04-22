@@ -370,18 +370,20 @@ function Splash() {
 
 // ── STAR positions for login background ─────────────────────────────────────
 const STARS = [
-  { top: "8%", left: "7%", size: 18, op: 0.7 },
-  { top: "14%", left: "88%", size: 12, op: 0.5 },
-  { top: "5%", left: "55%", size: 8, op: 0.4 },
-  { top: "28%", left: "92%", size: 14, op: 0.6 },
-  { top: "42%", left: "4%", size: 10, op: 0.45 },
-  { top: "62%", left: "91%", size: 16, op: 0.55 },
-  { top: "70%", left: "6%", size: 9, op: 0.4 },
-  { top: "80%", left: "82%", size: 12, op: 0.5 },
-  { top: "88%", left: "20%", size: 14, op: 0.45 },
-  { top: "92%", left: "65%", size: 8, op: 0.35 },
-  { top: "35%", left: "96%", size: 7, op: 0.3 },
-  { top: "55%", left: "2%", size: 11, op: 0.4 },
+  { top: "6%",  left: "8%",  size: 14, op: 0.45 },
+  { top: "12%", left: "85%", size: 10, op: 0.35 },
+  { top: "4%",  left: "52%", size: 7,  op: 0.3  },
+  { top: "25%", left: "93%", size: 11, op: 0.4  },
+  { top: "40%", left: "3%",  size: 8,  op: 0.3  },
+  { top: "60%", left: "92%", size: 13, op: 0.38 },
+  { top: "72%", left: "5%",  size: 8,  op: 0.32 },
+  { top: "82%", left: "80%", size: 10, op: 0.35 },
+  { top: "89%", left: "18%", size: 11, op: 0.3  },
+  { top: "93%", left: "62%", size: 7,  op: 0.28 },
+  { top: "33%", left: "95%", size: 6,  op: 0.25 },
+  { top: "54%", left: "1%",  size: 9,  op: 0.3  },
+  { top: "18%", left: "45%", size: 6,  op: 0.2  },
+  { top: "76%", left: "38%", size: 7,  op: 0.22 },
 ];
 
 function GoldStar({ top, left, size, op }) {
@@ -436,7 +438,7 @@ function LoginScreen({ onLogin }) {
   return (
     <div style={{
       minHeight: "100vh",
-      background: "linear-gradient(145deg, #7A9BB5 0%, #5E7F9A 40%, #4A6880 100%)",
+      background: "#F2EDE6",
       display: "flex", alignItems: "center", justifyContent: "center",
       padding: 24, position: "relative", overflow: "hidden",
       fontFamily: font.body,
@@ -444,47 +446,80 @@ function LoginScreen({ onLogin }) {
       {/* Scattered gold stars */}
       {STARS.map((s, i) => <GoldStar key={i} {...s} />)}
 
-      <div style={{ width: "100%", maxWidth: 420, position: "relative", zIndex: 1 }}>
-        {/* Logo */}
-        <div style={{ textAlign: "center", marginBottom: 32 }}>
+      <div style={{ width: "100%", maxWidth: 400, position: "relative", zIndex: 1 }}>
+
+        {/* Logo — no card, floats on cream bg */}
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
           <img
             src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
             alt="Signs for Sleep"
-            style={{ maxWidth: 340, width: "100%", height: "auto" }}
+            style={{ maxWidth: 320, width: "100%", height: "auto" }}
             onError={(e) => { e.target.style.display = "none"; }}
           />
-          <p style={{
-            fontFamily: font.body, fontSize: 12, letterSpacing: "0.18em",
-            color: "rgba(255,255,255,0.7)", textTransform: "uppercase",
-            marginTop: 8, fontWeight: 300,
-          }}>
-            Gentle Sleep Consultant
-          </p>
         </div>
 
-        <div style={{
-          background: "rgba(255,255,255,0.92)", borderRadius: 20,
-          padding: "32px 28px", backdropFilter: "blur(8px)",
-          boxShadow: "0 8px 40px rgba(44,36,32,0.15)",
-        }}>
-          <p style={{ fontSize: 14, color: C.mid, marginBottom: 20, lineHeight: 1.7, textAlign: "center" }}>
+        {/* Thin gold divider */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 28 }}>
+          <div style={{ flex: 1, height: "0.5px", background: C.gold, opacity: 0.5 }} />
+          <svg width="10" height="10" viewBox="0 0 20 20" fill="none">
+            <path d="M10 0 L11.2 8.8 L20 10 L11.2 11.2 L10 20 L8.8 11.2 L0 10 L8.8 8.8 Z" fill="#C9A84C" opacity="0.7"/>
+          </svg>
+          <div style={{ flex: 1, height: "0.5px", background: C.gold, opacity: 0.5 }} />
+        </div>
+
+        {/* Login area — blends into bg, no harsh card */}
+        <div style={{ textAlign: "center" }}>
+          <p style={{ fontSize: 13, color: C.mid, marginBottom: 20, lineHeight: 1.7, letterSpacing: "0.01em" }}>
             Enter the access code provided by your sleep consultant.
           </p>
-          <label style={gStyle.label}>Access Code</label>
+
+          <label style={{ ...gStyle.label, textAlign: "center", display: "block", marginBottom: 8 }}>
+            Access Code
+          </label>
+
+          {/* Small, refined input that blends with the cream bg */}
           <input
-            style={{ ...gStyle.input, fontSize: 22, letterSpacing: "0.25em", textAlign: "center", marginBottom: 16 }}
-            placeholder="e.g. LUNA42"
+            style={{
+              width: "60%",
+              padding: "10px 16px",
+              border: `1px solid ${C.border}`,
+              borderRadius: 8,
+              fontFamily: font.body,
+              fontSize: 16,
+              letterSpacing: "0.2em",
+              textAlign: "center",
+              background: "rgba(255,255,255,0.6)",
+              color: C.dark,
+              outline: "none",
+              boxSizing: "border-box",
+              display: "block",
+              margin: "0 auto 16px",
+            }}
+            placeholder="LUNA42"
             value={code}
             onChange={(e) => setCode(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleLogin()}
           />
-          {error && <p style={{ color: C.danger, fontSize: 13, marginBottom: 12, textAlign: "center" }}>{error}</p>}
-          <button style={gStyle.btnPrimary} onClick={handleLogin} disabled={loading}>
+
+          {error && <p style={{ color: C.danger, fontSize: 13, marginBottom: 12 }}>{error}</p>}
+
+          <button
+            style={{
+              ...gStyle.btnPrimary,
+              width: "60%",
+              borderRadius: 8,
+              padding: "11px 24px",
+              fontSize: 13,
+              letterSpacing: "0.05em",
+            }}
+            onClick={handleLogin}
+            disabled={loading}
+          >
             {loading ? "Checking…" : "Enter"}
           </button>
         </div>
 
-        <p style={{ textAlign: "center", fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 20, letterSpacing: "0.03em" }}>
+        <p style={{ textAlign: "center", fontSize: 11, color: C.muted, marginTop: 28, letterSpacing: "0.03em" }}>
           Sleep consultants: use your admin password to access the coach dashboard.
         </p>
       </div>
