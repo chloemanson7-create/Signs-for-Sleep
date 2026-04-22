@@ -192,6 +192,23 @@ const daysBetween = (a, b) =>
 // ── INTAKE QUESTIONS ───────────────────────────────────────────────────────
 const PRONOUNS = ["She/her", "They/them", "He/him", "Prefer not to say"];
 
+const PM_TIMES = Array.from({ length: 24 }, (_, i) => {
+  const h = Math.floor(i / 2) + 12 > 12 ? Math.floor(i / 2) + 12 - 12 : Math.floor(i / 2) + 12;
+  const m = i % 2 === 0 ? "00" : "30";
+  const ampm = Math.floor(i / 2) + 12 >= 12 && Math.floor(i / 2) + 12 < 24 ? "pm" : "am";
+  return `${h}:${m}${ampm}`;
+});
+const AM_TIMES = Array.from({ length: 24 }, (_, i) => {
+  const base = i + 4;
+  const h = base % 12 === 0 ? 12 : base % 12;
+  const ampm = base < 12 ? "am" : "pm";
+  return `${h}:00${ampm}`;
+});
+const BEDTIMES = ["6:00pm","6:30pm","7:00pm","7:30pm","8:00pm","8:30pm","9:00pm","9:30pm","10:00pm","10:30pm","11:00pm","11:30pm","12:00am"];
+const WAKETIMES = ["4:00am","4:30am","5:00am","5:30am","6:00am","6:30am","7:00am","7:30am","8:00am","8:30am","9:00am","9:30am","10:00am"];
+const SLEEP_ASSOCIATIONS = ["Dummy/pacifier","Rocking","Patting","Singing","Lullaby","White/pink noise","Sleep sack","Soft toy/comforter","Feed to sleep","Contact/holding","Motion (pram/car)","Other"];
+const TIRED_CUES = ["Yawning","Rubbing eyes","Red eyebrows/rimmed eyes","Irritable/fussy","Glazed eyes","Becomes clumsy","Pulling ears","Zoning out","None obvious"];
+
 const INTAKE_SECTIONS = [
   {
     title: "About You",
@@ -210,7 +227,7 @@ const INTAKE_SECTIONS = [
   {
     title: "Child's Health History",
     fields: [
-      { key: "birth_type", label: "How was your baby born? (vaginal/caesarean)", type: "text" },
+      { key: "birth_type", label: "How was your baby born?", type: "select", options: ["Vaginally","Caesarean","Vaginal after caesarean (VBAC)","Assisted (forceps/vacuum)"] },
       { key: "birth_weight", label: "Birth weight", type: "text" },
       { key: "health_conditions", label: "Any diagnosed health conditions or medical history relevant to sleep (e.g. reflux, tongue tie, allergies)?", type: "textarea" },
       { key: "medications", label: "Is your child taking any prescribed, over the counter, herbal or naturopathic medicines, vitamins or supplements?", type: "textarea" },
@@ -223,14 +240,16 @@ const INTAKE_SECTIONS = [
     title: "Current Sleep Situation",
     fields: [
       { key: "sleep_location", label: "Where does your child currently sleep?", type: "text" },
-      { key: "sleep_associations", label: "What does your child need to fall asleep? (e.g. feeding, rocking, dummy, contact)", type: "textarea" },
-      { key: "typical_bedtime", label: "What time does your child usually go to bed?", type: "text" },
-      { key: "typical_wake_time", label: "What time does your child usually wake for the day?", type: "text" },
-      { key: "night_wakings", label: "On an average night, how many times does your child wake overnight, and how long are they awake?", type: "textarea" },
-      { key: "nap_number", label: "How many naps per day?", type: "text" },
+      { key: "sleep_associations", label: "What does your child need to fall asleep? (select all that apply)", type: "multicheck", options: SLEEP_ASSOCIATIONS, otherKey: "sleep_associations_other" },
+      { key: "typical_bedtime", label: "What time does your child usually go to sleep?", type: "select", options: BEDTIMES },
+      { key: "typical_wake_time", label: "What time does your child usually wake for the day?", type: "select", options: WAKETIMES },
+      { key: "night_wakings_count", label: "On an average night, how many times does your child wake overnight?", type: "select", options: Array.from({ length: 26 }, (_, i) => `${i}`) },
+      { key: "night_wakings_duration", label: "How long are they typically awake?", type: "select", options: ["Less than 15 minutes","15-30 minutes","30-60 minutes","More than 60 minutes","Varies"] },
+      { key: "night_wakings_notes", label: "Any additional details about night wakings", type: "textarea" },
+      { key: "nap_number", label: "How many naps per day?", type: "select", options: Array.from({ length: 16 }, (_, i) => `${i}`) },
       { key: "nap_details", label: "Describe a typical nap (duration, location, how they fall asleep)", type: "textarea" },
       { key: "wake_window", label: "What is your child's typical wake window before becoming tired?", type: "text" },
-      { key: "tired_cues", label: "What tired cues does your child show?", type: "textarea" },
+      { key: "tired_cues", label: "What tired cues does your child show? (select all that apply)", type: "multicheck", options: TIRED_CUES, otherKey: "tired_cues_other" },
       { key: "sleep_problem_overview", label: "Please give a brief overview of your child's sleep problem/issue and what methods (if any) you have tried so far to alleviate this.", type: "textarea" },
       { key: "daytime_temperament", label: "What is your child's temperament usually like during the day?", type: "textarea" },
     ],
@@ -349,6 +368,32 @@ function Splash() {
   );
 }
 
+// ── STAR positions for login background ─────────────────────────────────────
+const STARS = [
+  { top: "8%", left: "7%", size: 18, op: 0.7 },
+  { top: "14%", left: "88%", size: 12, op: 0.5 },
+  { top: "5%", left: "55%", size: 8, op: 0.4 },
+  { top: "28%", left: "92%", size: 14, op: 0.6 },
+  { top: "42%", left: "4%", size: 10, op: 0.45 },
+  { top: "62%", left: "91%", size: 16, op: 0.55 },
+  { top: "70%", left: "6%", size: 9, op: 0.4 },
+  { top: "80%", left: "82%", size: 12, op: 0.5 },
+  { top: "88%", left: "20%", size: 14, op: 0.45 },
+  { top: "92%", left: "65%", size: 8, op: 0.35 },
+  { top: "35%", left: "96%", size: 7, op: 0.3 },
+  { top: "55%", left: "2%", size: 11, op: 0.4 },
+];
+
+function GoldStar({ top, left, size, op }) {
+  return (
+    <svg style={{ position: "absolute", top, left, opacity: op, pointerEvents: "none" }}
+      width={size} height={size} viewBox="0 0 20 20" fill="none">
+      <path d="M10 0 L11.2 8.8 L20 10 L11.2 11.2 L10 20 L8.8 11.2 L0 10 L8.8 8.8 Z"
+        fill="#C9A84C"/>
+    </svg>
+  );
+}
+
 // ── LOGIN ───────────────────────────────────────────────────────────────────
 function LoginScreen({ onLogin }) {
   const [code, setCode] = useState("");
@@ -360,7 +405,6 @@ function LoginScreen({ onLogin }) {
     setLoading(true);
     const upper = code.trim().toUpperCase();
 
-    // Check coach password
     const { data: settings } = await supabase
       .from("settings")
       .select("value")
@@ -374,7 +418,6 @@ function LoginScreen({ onLogin }) {
       return;
     }
 
-    // Check client code
     const { data: client } = await supabase
       .from("clients")
       .select("id, name")
@@ -391,34 +434,57 @@ function LoginScreen({ onLogin }) {
   };
 
   return (
-    <div style={{ ...gStyle.app, display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", padding: 24 }}>
-      <div style={{ width: "100%", maxWidth: 400 }}>
+    <div style={{
+      minHeight: "100vh",
+      background: "linear-gradient(145deg, #7A9BB5 0%, #5E7F9A 40%, #4A6880 100%)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 24, position: "relative", overflow: "hidden",
+      fontFamily: font.body,
+    }}>
+      {/* Scattered gold stars */}
+      {STARS.map((s, i) => <GoldStar key={i} {...s} />)}
+
+      <div style={{ width: "100%", maxWidth: 420, position: "relative", zIndex: 1 }}>
         {/* Logo */}
-        <div style={{ textAlign: "center", marginBottom: 40 }}>
-          <div style={{ ...gStyle.logo, fontSize: 36 }}>Signs for Sleep</div>
-          <span style={{ ...gStyle.logoSub, marginTop: 4 }}>Sleep Consulting</span>
-          <div style={{ width: 60, height: 2, background: C.gold, margin: "16px auto 0" }} />
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <img
+            src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
+            alt="Signs for Sleep"
+            style={{ maxWidth: 340, width: "100%", height: "auto" }}
+            onError={(e) => { e.target.style.display = "none"; }}
+          />
+          <p style={{
+            fontFamily: font.body, fontSize: 12, letterSpacing: "0.18em",
+            color: "rgba(255,255,255,0.7)", textTransform: "uppercase",
+            marginTop: 8, fontWeight: 300,
+          }}>
+            Gentle Sleep Consultant
+          </p>
         </div>
 
-        <div style={gStyle.card}>
-          <p style={{ fontSize: 15, color: C.mid, marginBottom: 24, lineHeight: 1.6 }}>
+        <div style={{
+          background: "rgba(255,255,255,0.92)", borderRadius: 20,
+          padding: "32px 28px", backdropFilter: "blur(8px)",
+          boxShadow: "0 8px 40px rgba(44,36,32,0.15)",
+        }}>
+          <p style={{ fontSize: 14, color: C.mid, marginBottom: 20, lineHeight: 1.7, textAlign: "center" }}>
             Enter the access code provided by your sleep consultant.
           </p>
           <label style={gStyle.label}>Access Code</label>
           <input
-            style={{ ...gStyle.input, fontSize: 20, letterSpacing: "0.2em", textAlign: "center", marginBottom: 16 }}
+            style={{ ...gStyle.input, fontSize: 22, letterSpacing: "0.25em", textAlign: "center", marginBottom: 16 }}
             placeholder="e.g. LUNA42"
             value={code}
             onChange={(e) => setCode(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleLogin()}
           />
-          {error && <p style={{ color: C.danger, fontSize: 13, marginBottom: 12 }}>{error}</p>}
+          {error && <p style={{ color: C.danger, fontSize: 13, marginBottom: 12, textAlign: "center" }}>{error}</p>}
           <button style={gStyle.btnPrimary} onClick={handleLogin} disabled={loading}>
             {loading ? "Checking…" : "Enter"}
           </button>
         </div>
 
-        <p style={{ textAlign: "center", fontSize: 12, color: C.muted, marginTop: 24 }}>
+        <p style={{ textAlign: "center", fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 20, letterSpacing: "0.03em" }}>
           Sleep consultants: use your admin password to access the coach dashboard.
         </p>
       </div>
@@ -1099,6 +1165,40 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
                 <option key={o} value={o}>{o}</option>
               ))}
             </select>
+          ) : f.type === "multicheck" ? (
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", background: C.white }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                {f.options.map((o) => {
+                  const vals = responses[f.key] ? responses[f.key].split(",").map(v => v.trim()) : [];
+                  const checked = vals.includes(o);
+                  return (
+                    <label key={o} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: C.dark }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          const next = checked ? vals.filter(v => v !== o) : [...vals, o];
+                          set(f.key, next.join(", "));
+                        }}
+                        style={{ accentColor: C.terracotta, width: 15, height: 15 }}
+                      />
+                      {o}
+                    </label>
+                  );
+                })}
+              </div>
+              {f.otherKey !== undefined && (
+                <div>
+                  <label style={{ ...gStyle.label, marginTop: 4 }}>Other (please specify)</label>
+                  <input
+                    style={gStyle.input}
+                    value={responses[f.otherKey] || ""}
+                    placeholder="Anything else..."
+                    onChange={(e) => set(f.otherKey, e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
           ) : (
             <input
               type={f.type}
