@@ -370,20 +370,22 @@ function Splash() {
 
 // ── STAR positions for login background ─────────────────────────────────────
 const STARS = [
-  { top: "6%",  left: "8%",  size: 14, op: 0.45 },
-  { top: "12%", left: "85%", size: 10, op: 0.35 },
-  { top: "4%",  left: "52%", size: 7,  op: 0.3  },
-  { top: "25%", left: "93%", size: 11, op: 0.4  },
-  { top: "40%", left: "3%",  size: 8,  op: 0.3  },
-  { top: "60%", left: "92%", size: 13, op: 0.38 },
-  { top: "72%", left: "5%",  size: 8,  op: 0.32 },
-  { top: "82%", left: "80%", size: 10, op: 0.35 },
-  { top: "89%", left: "18%", size: 11, op: 0.3  },
-  { top: "93%", left: "62%", size: 7,  op: 0.28 },
-  { top: "33%", left: "95%", size: 6,  op: 0.25 },
-  { top: "54%", left: "1%",  size: 9,  op: 0.3  },
-  { top: "18%", left: "45%", size: 6,  op: 0.2  },
-  { top: "76%", left: "38%", size: 7,  op: 0.22 },
+  { top: "5%",  left: "6%",  size: 28, op: 0.75 },
+  { top: "10%", left: "84%", size: 22, op: 0.65 },
+  { top: "3%",  left: "50%", size: 16, op: 0.55 },
+  { top: "24%", left: "92%", size: 24, op: 0.7  },
+  { top: "38%", left: "2%",  size: 18, op: 0.6  },
+  { top: "58%", left: "91%", size: 26, op: 0.65 },
+  { top: "70%", left: "4%",  size: 20, op: 0.6  },
+  { top: "80%", left: "82%", size: 22, op: 0.65 },
+  { top: "87%", left: "16%", size: 24, op: 0.6  },
+  { top: "92%", left: "60%", size: 16, op: 0.55 },
+  { top: "32%", left: "94%", size: 14, op: 0.5  },
+  { top: "52%", left: "1%",  size: 18, op: 0.55 },
+  { top: "17%", left: "42%", size: 13, op: 0.45 },
+  { top: "74%", left: "36%", size: 15, op: 0.5  },
+  { top: "45%", left: "88%", size: 12, op: 0.45 },
+  { top: "63%", left: "12%", size: 14, op: 0.5  },
 ];
 
 function GoldStar({ top, left, size, op }) {
@@ -446,29 +448,29 @@ function LoginScreen({ onLogin }) {
       {/* Scattered gold stars */}
       {STARS.map((s, i) => <GoldStar key={i} {...s} />)}
 
-      <div style={{ width: "100%", maxWidth: 400, position: "relative", zIndex: 1 }}>
+      <div style={{ width: "100%", maxWidth: 560, position: "relative", zIndex: 1, textAlign: "center" }}>
 
-        {/* Logo — no card, floats on cream bg */}
-        <div style={{ textAlign: "center", marginBottom: 28 }}>
+        {/* Logo — large, centred */}
+        <div style={{ marginBottom: 24 }}>
           <img
             src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
             alt="Signs for Sleep"
-            style={{ maxWidth: 320, width: "100%", height: "auto" }}
+            style={{ maxWidth: 520, width: "100%", height: "auto" }}
             onError={(e) => { e.target.style.display = "none"; }}
           />
         </div>
 
-        {/* Thin gold divider */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 28 }}>
-          <div style={{ flex: 1, height: "0.5px", background: C.gold, opacity: 0.5 }} />
+        {/* Thin gold divider — full width to match logo */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 28, maxWidth: 520, margin: "0 auto 28px" }}>
+          <div style={{ flex: 1, height: "0.5px", background: C.gold, opacity: 0.6 }} />
           <svg width="10" height="10" viewBox="0 0 20 20" fill="none">
-            <path d="M10 0 L11.2 8.8 L20 10 L11.2 11.2 L10 20 L8.8 11.2 L0 10 L8.8 8.8 Z" fill="#C9A84C" opacity="0.7"/>
+            <path d="M10 0 L11.2 8.8 L20 10 L11.2 11.2 L10 20 L8.8 11.2 L0 10 L8.8 8.8 Z" fill="#C9A84C" opacity="0.8"/>
           </svg>
-          <div style={{ flex: 1, height: "0.5px", background: C.gold, opacity: 0.5 }} />
+          <div style={{ flex: 1, height: "0.5px", background: C.gold, opacity: 0.6 }} />
         </div>
 
-        {/* Login area — blends into bg, no harsh card */}
-        <div style={{ textAlign: "center" }}>
+        {/* Login area */}
+        <div>
           <p style={{ fontSize: 13, color: C.mid, marginBottom: 20, lineHeight: 1.7, letterSpacing: "0.01em" }}>
             Enter the access code provided by your sleep consultant.
           </p>
@@ -477,10 +479,9 @@ function LoginScreen({ onLogin }) {
             Access Code
           </label>
 
-          {/* Small, refined input that blends with the cream bg */}
           <input
             style={{
-              width: "60%",
+              width: "52%",
               padding: "10px 16px",
               border: `1px solid ${C.border}`,
               borderRadius: 8,
@@ -488,12 +489,12 @@ function LoginScreen({ onLogin }) {
               fontSize: 16,
               letterSpacing: "0.2em",
               textAlign: "center",
-              background: "rgba(255,255,255,0.6)",
+              background: "rgba(255,255,255,0.55)",
               color: C.dark,
               outline: "none",
               boxSizing: "border-box",
               display: "block",
-              margin: "0 auto 16px",
+              margin: "0 auto 14px",
             }}
             placeholder="LUNA42"
             value={code}
@@ -506,11 +507,13 @@ function LoginScreen({ onLogin }) {
           <button
             style={{
               ...gStyle.btnPrimary,
-              width: "60%",
+              width: "52%",
               borderRadius: 8,
               padding: "11px 24px",
               fontSize: 13,
               letterSpacing: "0.05em",
+              display: "block",
+              margin: "0 auto",
             }}
             onClick={handleLogin}
             disabled={loading}
