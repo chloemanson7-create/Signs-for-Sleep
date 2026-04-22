@@ -261,31 +261,80 @@ const INTAKE_SECTIONS = [
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ═══════════════════════════════════════════════════════════════════════════
+
+// Generate a unique token for this browser session
+const genToken = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+
 export default function App() {
-  const [session, setSession] = useState(null); // { role: 'coach'|'client', clientId }
+  const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const stored = localStorage.getItem("sfs_session");
     if (stored) {
-      try { setSession(JSON.parse(stored)); } catch {}
+      try {
+        const parsed = JSON.parse(stored);
+        // Coach sessions don't need token validation
+        if (parsed.role === "coach") {
+          setSession(parsed);
+          setLoading(false);
+          return;
+        }
+        // For clients, verify the token still matches Supabase
+        if (parsed.role === "client" && parsed.token && parsed.clientId) {
+          supabase
+            .from("clients")
+            .select("session_token, name")
+            .eq("id", parsed.clientId)
+            .single()
+            .then(({ data }) => {
+              if (data && data.session_token === parsed.token) {
+                setSession(parsed);
+              } else {
+                // Token mismatch — another device has logged in
+                localStorage.removeItem("sfs_session");
+              }
+              setLoading(false);
+            });
+          return;
+        }
+      } catch {}
     }
     setLoading(false);
   }, []);
 
-  const login = (s) => {
-    setSession(s);
-    localStorage.setItem("sfs_session", JSON.stringify(s));
+  const login = async (s) => {
+    // For client logins, write a session token to Supabase
+    if (s.role === "client") {
+      const token = genToken();
+      await supabase
+        .from("clients")
+        .update({ session_token: token })
+        .eq("id", s.clientId);
+      const sessionWithToken = { ...s, token };
+      setSession(sessionWithToken);
+      localStorage.setItem("sfs_session", JSON.stringify(sessionWithToken));
+    } else {
+      setSession(s);
+      localStorage.setItem("sfs_session", JSON.stringify(s));
+    }
   };
-  const logout = () => {
+
+  const logout = async (clientId) => {
+    if (clientId) {
+      await supabase
+        .from("clients")
+        .update({ session_token: null })
+        .eq("id", clientId);
+    }
     setSession(null);
     localStorage.removeItem("sfs_session");
   };
 
   if (loading) return <Splash />;
   if (!session) return <LoginScreen onLogin={login} />;
-  if (session.role === "coach") return <CoachApp session={session} onLogout={logout} />;
-  return <ClientApp session={session} onLogout={logout} />;
+  if (session.role === "coach") return <CoachApp session={session} onLogout={() => logout(null)} />;
+  return <ClientApp session={session} onLogout={() => logout(session.clientId)} />;
 }
 
 // ── SPLASH ──────────────────────────────────────────────────────────────────
