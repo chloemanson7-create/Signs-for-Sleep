@@ -1162,6 +1162,14 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
       await supabase.from("intake_responses").update(responses).eq("client_id", clientId);
     } else {
       await supabase.from("intake_responses").insert({ ...responses, client_id: clientId });
+      // Notify coach by email via Supabase Edge Function
+      try {
+        const { data: clientData } = await supabase
+          .from("clients").select("name").eq("id", clientId).single();
+        await supabase.functions.invoke("notify-intake", {
+          body: { clientName: clientData?.name || "A client", clientId },
+        });
+      } catch (e) { /* silent fail — don't block the client */ }
     }
     setSaving(false);
     onComplete();
@@ -1265,11 +1273,15 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
 }
 
 // ── SLEEP DIARY ─────────────────────────────────────────────────────────────
+const BOOKING_URL = "https://calendar.app.google/UJPyiq6md5VCxfuV6";
+const DIARY_DAYS_REQUIRED = 5;
+
 function SleepDiaryViewer({ clientId, isCoach }) {
   const [selectedDate, setSelectedDate] = useState(today());
   const [entry, setEntry] = useState(null);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
+  const [diaryCount, setDiaryCount] = useState(0);
 
   const emptyNap = () => ({ start: "", end: "", how_fell_asleep: "", location: "", resettled: "", notes: "" });
   const emptyEntry = () => ({
@@ -1279,6 +1291,17 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     daytime_notes: "",
     naps: [emptyNap()],
   });
+
+  // Count how many diary entries this client has
+  const loadDiaryCount = useCallback(async () => {
+    const { count } = await supabase
+      .from("sleep_diary")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", clientId);
+    setDiaryCount(count || 0);
+  }, [clientId]);
+
+  useEffect(() => { if (!isCoach) loadDiaryCount(); }, [loadDiaryCount, isCoach]);
 
   const loadEntry = useCallback(async () => {
     const { data } = await supabase
@@ -1304,6 +1327,8 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     setSaving(false);
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 1500);
+    // Refresh count after saving in case this was a new entry
+    loadDiaryCount();
   };
 
   const update = (field, value) => {
@@ -1344,8 +1369,72 @@ function SleepDiaryViewer({ clientId, isCoach }) {
 
   const calcs = calcSleep(entry);
 
+  const bookingUnlocked = !isCoach && diaryCount >= DIARY_DAYS_REQUIRED;
+  const daysRemaining = Math.max(0, DIARY_DAYS_REQUIRED - diaryCount);
+
   return (
     <div>
+      {/* Booking banner — client only */}
+      {!isCoach && (
+        bookingUnlocked ? (
+          <div style={{
+            background: "linear-gradient(135deg, #C4714A 0%, #C9A84C 100%)",
+            borderRadius: 14, padding: "20px 24px", marginBottom: 24,
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            flexWrap: "wrap", gap: 12,
+          }}>
+            <div>
+              <div style={{ fontFamily: font.display, fontSize: 18, color: C.white, marginBottom: 4 }}>
+                🎉 You're ready to book your consult!
+              </div>
+              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.85)", lineHeight: 1.5 }}>
+                You've completed {diaryCount} days of sleep diary. Choose a time that suits you.
+              </div>
+            </div>
+            <a
+              href={BOOKING_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                background: C.white, color: C.terracotta, borderRadius: 10,
+                padding: "12px 24px", fontFamily: font.body, fontSize: 14,
+                fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap",
+                letterSpacing: "0.02em",
+              }}
+            >
+              Book your consult →
+            </a>
+          </div>
+        ) : (
+          <div style={{
+            background: C.blueLight, borderRadius: 14, padding: "16px 20px",
+            marginBottom: 24, display: "flex", alignItems: "center", gap: 16,
+          }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: C.blueDark, marginBottom: 4 }}>
+                Sleep diary progress
+              </div>
+              <div style={{ fontSize: 13, color: C.blueDark, lineHeight: 1.5 }}>
+                Complete {daysRemaining} more day{daysRemaining !== 1 ? "s" : ""} of sleep diary to unlock your consult booking.
+              </div>
+            </div>
+            <div style={{ textAlign: "center", minWidth: 56 }}>
+              <div style={{ fontSize: 28, fontWeight: 700, color: C.blue }}>{diaryCount}</div>
+              <div style={{ fontSize: 11, color: C.blueDark, letterSpacing: "0.05em" }}>of {DIARY_DAYS_REQUIRED}</div>
+            </div>
+            {/* Progress dots */}
+            <div style={{ display: "flex", gap: 6 }}>
+              {Array.from({ length: DIARY_DAYS_REQUIRED }).map((_, i) => (
+                <div key={i} style={{
+                  width: 10, height: 10, borderRadius: "50%",
+                  background: i < diaryCount ? C.terracotta : "rgba(107,143,168,0.3)",
+                }} />
+              ))}
+            </div>
+          </div>
+        )
+      )}
+
       {/* Date nav */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
         <button onClick={() => changeDate(-1)} style={{ ...gStyle.btnSecondary, padding: "8px 14px" }}>←</button>
