@@ -1328,8 +1328,28 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     if (!data) return;
     setSaving(true);
     const calcs = calcSleep(data);
-    const payload = { client_id: clientId, date, ...data, ...calcs };
-    await supabase.from("sleep_diary").upsert(payload, { onConflict: "client_id,date" });
+    // Strip any fields not in the database schema
+    const { id, created_at, ...rest } = data;
+    const payload = {
+      client_id: clientId,
+      date,
+      wake_time: rest.wake_time || null,
+      bed_time: rest.bed_time || null,
+      naps: rest.naps || [],
+      notes: rest.notes || null,
+      routine_start_time: rest.routine_start_time || null,
+      into_bed_time: rest.into_bed_time || null,
+      night_wakings_count: rest.night_wakings_count || null,
+      night_wakings_notes: rest.night_wakings_notes || null,
+      daytime_notes: rest.daytime_notes || null,
+      ...calcs,
+    };
+    const { error } = await supabase.from("sleep_diary").upsert(payload, { onConflict: "client_id,date" });
+    if (error) {
+      console.error("Diary save error:", error);
+      setSaving(false);
+      return;
+    }
     setSaving(false);
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 2000);
