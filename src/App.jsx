@@ -2,7 +2,7 @@
 // Stack: React (single component) + Supabase
 // Replace SUPABASE_URL and SUPABASE_ANON_KEY with your actual values
 
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ── CONFIG ─────────────────────────────────────────────────────────────────
@@ -1319,17 +1319,23 @@ function SleepDiaryViewer({ clientId, isCoach }) {
 
   useEffect(() => { loadEntry(); }, [loadEntry]);
 
-  const save = async (updated) => {
+  // Keep a ref to the latest entry so we can save it before navigating
+  const entryRef = useRef(entry);
+  useEffect(() => { entryRef.current = entry; }, [entry]);
+
+  const saveEntry = async (updated, dateToSave) => {
+    if (!updated) return;
     setSaving(true);
     const calcs = calcSleep(updated);
-    const payload = { client_id: clientId, date: selectedDate, ...updated, ...calcs };
+    const payload = { client_id: clientId, date: dateToSave || selectedDate, ...updated, ...calcs };
     await supabase.from("sleep_diary").upsert(payload, { onConflict: "client_id,date" });
     setSaving(false);
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 1500);
-    // Refresh count after saving in case this was a new entry
     loadDiaryCount();
   };
+
+  const save = (updated) => saveEntry(updated, selectedDate);
 
   const update = (field, value) => {
     const updated = { ...entry, [field]: value };
@@ -1358,11 +1364,23 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     save(updated);
   };
 
-  // Navigate days
-  const changeDate = (delta) => {
+  // Navigate days — save current entry first, then change date
+  const changeDate = async (delta) => {
+    // Save whatever is currently in the entry before navigating
+    if (entryRef.current) {
+      await saveEntry(entryRef.current, selectedDate);
+    }
     const d = new Date(selectedDate);
     d.setDate(d.getDate() + delta);
     setSelectedDate(d.toISOString().split("T")[0]);
+  };
+
+  // Also save when date picker changes directly
+  const handleDateChange = async (newDate) => {
+    if (entryRef.current) {
+      await saveEntry(entryRef.current, selectedDate);
+    }
+    setSelectedDate(newDate);
   };
 
   if (!entry) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
@@ -1439,7 +1457,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
         <button onClick={() => changeDate(-1)} style={{ ...gStyle.btnSecondary, padding: "8px 14px" }}>←</button>
         <input type="date" style={{ ...gStyle.input, flex: 1, textAlign: "center" }}
-          value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)}
+          value={selectedDate} onChange={(e) => handleDateChange(e.target.value)}
           max={today()}
         />
         <button onClick={() => changeDate(1)} style={{ ...gStyle.btnSecondary, padding: "8px 14px" }}
