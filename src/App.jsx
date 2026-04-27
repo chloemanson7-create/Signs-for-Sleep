@@ -1276,129 +1276,105 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
 const BOOKING_URL = "https://calendar.app.google/UJPyiq6md5VCxfuV6";
 const DIARY_DAYS_REQUIRED = 5;
 
+const emptyNap = () => ({ start: "", end: "", how_fell_asleep: "", location: "", resettled: "", notes: "" });
+const emptyEntry = () => ({
+  wake_time: "", bed_time: "", notes: "",
+  routine_start_time: "", into_bed_time: "", asleep_time: "",
+  night_wakings_count: "", night_wakings_notes: "",
+  daytime_notes: "",
+  naps: [emptyNap()],
+});
+
 function SleepDiaryViewer({ clientId, isCoach }) {
   const [selectedDate, setSelectedDate] = useState(today());
   const [entry, setEntry] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
   const [diaryCount, setDiaryCount] = useState(0);
-  const [navigating, setNavigating] = useState(false);
 
-  // Refs to always have latest values without stale closures
-  const selectedDateRef = useRef(selectedDate);
-  const entryRef = useRef(entry);
-  useEffect(() => { selectedDateRef.current = selectedDate; }, [selectedDate]);
-  useEffect(() => { entryRef.current = entry; }, [entry]);
-
-  const emptyNap = () => ({ start: "", end: "", how_fell_asleep: "", location: "", resettled: "", notes: "" });
-  const emptyEntry = () => ({
-    wake_time: "", bed_time: "", notes: "",
-    routine_start_time: "", into_bed_time: "", asleep_time: "",
-    night_wakings_count: "", night_wakings_notes: "",
-    daytime_notes: "",
-    naps: [emptyNap()],
-  });
-
-  const loadDiaryCount = useCallback(async () => {
+  const loadDiaryCount = async () => {
     const { count } = await supabase
       .from("sleep_diary")
       .select("id", { count: "exact", head: true })
       .eq("client_id", clientId);
     setDiaryCount(count || 0);
-  }, [clientId]);
+  };
 
-  useEffect(() => { if (!isCoach) loadDiaryCount(); }, [loadDiaryCount, isCoach]);
+  useEffect(() => { if (!isCoach) loadDiaryCount(); }, [clientId]);
 
-  // Core save — always uses the date you pass in explicitly
-  const persistEntry = useCallback(async (data, date) => {
-    if (!data || !date) return;
+  // Load entry whenever selectedDate changes
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      const { data } = await supabase
+        .from("sleep_diary")
+        .select("*")
+        .eq("client_id", clientId)
+        .eq("date", selectedDate)
+        .single();
+      if (!cancelled) {
+        setEntry(data ? { ...data, naps: data.naps || [emptyNap()] } : emptyEntry());
+        setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [clientId, selectedDate]);
+
+  // Direct save — called explicitly, returns a promise
+  const doSave = async (data, date) => {
+    if (!data) return;
+    setSaving(true);
     const calcs = calcSleep(data);
     const payload = { client_id: clientId, date, ...data, ...calcs };
     await supabase.from("sleep_diary").upsert(payload, { onConflict: "client_id,date" });
+    setSaving(false);
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 2000);
     loadDiaryCount();
-  }, [clientId, loadDiaryCount]);
-
-  // Load entry for a given date
-  const loadEntry = useCallback(async (date) => {
-    setEntry(null);
-    const { data } = await supabase
-      .from("sleep_diary")
-      .select("*")
-      .eq("client_id", clientId)
-      .eq("date", date)
-      .single();
-    if (data) {
-      setEntry({ ...data, naps: data.naps || [emptyNap()] });
-    } else {
-      setEntry(emptyEntry());
-    }
-  }, [clientId]);
-
-  // Load on mount only
-  useEffect(() => { loadEntry(selectedDate); }, []);
-
-  // Save on every entry change (debounced 600ms)
-  const saveTimerRef = useRef(null);
-  useEffect(() => {
-    if (!entry || navigating) return;
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    setSaving(true);
-    saveTimerRef.current = setTimeout(async () => {
-      await persistEntry(entry, selectedDateRef.current);
-      setSaving(false);
-      setSavedMsg(true);
-      setTimeout(() => setSavedMsg(false), 1500);
-    }, 600);
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
-  }, [entry]);
-
-  const update = (field, value) => {
-    setEntry(prev => ({ ...prev, [field]: value }));
   };
 
-  const updateNap = (idx, field, value) => {
-    setEntry(prev => {
-      const naps = prev.naps.map((n, i) => i === idx ? { ...n, [field]: value } : n);
-      return { ...prev, naps };
-    });
+  // Each field update saves immediately
+  const update = async (field, value) => {
+    const updated = { ...entry, [field]: value };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
   };
 
-  const addNap = () => {
-    setEntry(prev => ({ ...prev, naps: [...(prev.naps || []), emptyNap()] }));
+  const updateNap = async (idx, field, value) => {
+    const naps = entry.naps.map((n, i) => i === idx ? { ...n, [field]: value } : n);
+    const updated = { ...entry, naps };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
   };
 
-  const removeNap = (idx) => {
-    setEntry(prev => ({ ...prev, naps: prev.naps.filter((_, i) => i !== idx) }));
+  const addNap = async () => {
+    const naps = [...(entry.naps || []), emptyNap()];
+    const updated = { ...entry, naps };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
   };
 
-  // Navigate — flush any pending save, then load new date
-  const navigateToDate = async (newDate) => {
-    if (newDate === selectedDate) return;
-    setNavigating(true);
-    // Clear any pending debounced save
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    // Immediately persist current entry for current date
-    if (entryRef.current) {
-      await persistEntry(entryRef.current, selectedDateRef.current);
-    }
-    setSelectedDate(newDate);
-    selectedDateRef.current = newDate;
-    await loadEntry(newDate);
-    setNavigating(false);
+  const removeNap = async (idx) => {
+    const naps = entry.naps.filter((_, i) => i !== idx);
+    const updated = { ...entry, naps };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
   };
 
   const changeDate = (delta) => {
     const d = new Date(selectedDate);
     d.setDate(d.getDate() + delta);
-    navigateToDate(d.toISOString().split("T")[0]);
+    setSelectedDate(d.toISOString().split("T")[0]);
   };
 
-  const handleDateChange = (newDate) => navigateToDate(newDate);
+  const handleDateChange = (newDate) => setSelectedDate(newDate);
 
-  if (!entry) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
+  if (loading || !entry) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
 
   const calcs = calcSleep(entry);
-
   const bookingUnlocked = !isCoach && diaryCount >= DIARY_DAYS_REQUIRED;
   const daysRemaining = Math.max(0, DIARY_DAYS_REQUIRED - diaryCount);
 
