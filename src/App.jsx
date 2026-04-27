@@ -1344,7 +1344,15 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       daytime_notes: rest.daytime_notes || null,
       ...calcs,
     };
-    const { error } = await supabase.from("sleep_diary").upsert(payload, { onConflict: "client_id,date" });
+    // Try update first, then insert if no row exists
+    const { data: existing } = await supabase
+      .from("sleep_diary").select("id").eq("client_id", clientId).eq("date", date).single();
+    let error;
+    if (existing?.id) {
+      ({ error } = await supabase.from("sleep_diary").update(payload).eq("id", existing.id));
+    } else {
+      ({ error } = await supabase.from("sleep_diary").insert(payload));
+    }
     if (error) {
       console.error("Diary save error:", error);
       setSaving(false);
