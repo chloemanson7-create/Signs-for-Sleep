@@ -1329,7 +1329,38 @@ function SleepDiaryViewer({ clientId, isCoach }) {
   const doSave = async (data, date) => {
     if (!data) return;
     setSaving(true);
-    const calcs = calcSleep(data);
+
+    // Calculate nap total
+    const totalNapMins = calcNapMins(data);
+
+    // Look up previous day's bed_time to calculate night sleep
+    const prevDate = new Date(date + "T00:00:00");
+    prevDate.setDate(prevDate.getDate() - 1);
+    const prevDateStr = prevDate.toISOString().split("T")[0];
+    const { data: prevEntry } = await supabase
+      .from("sleep_diary").select("bed_time")
+      .eq("client_id", clientId).eq("date", prevDateStr).single();
+    const nightSleep = calcNightSleep(prevEntry?.bed_time, data.wake_time);
+    const total24h = totalNapMins + (nightSleep || 0);
+
+    // Also update TOMORROW's night sleep if today's bed_time changed
+    const nextDate = new Date(date + "T00:00:00");
+    nextDate.setDate(nextDate.getDate() + 1);
+    const nextDateStr = nextDate.toISOString().split("T")[0];
+    const { data: nextEntry } = await supabase
+      .from("sleep_diary").select("id, wake_time, total_nap_mins")
+      .eq("client_id", clientId).eq("date", nextDateStr).single();
+    if (nextEntry?.id && data.bed_time) {
+      const nextNightSleep = calcNightSleep(data.bed_time, nextEntry.wake_time);
+      if (nextNightSleep !== null) {
+        const nextTotal = (nextEntry.total_nap_mins || 0) + nextNightSleep;
+        await supabase.from("sleep_diary").update({
+          night_sleep_mins: nextNightSleep,
+          total_sleep_24h: nextTotal,
+        }).eq("id", nextEntry.id);
+      }
+    }
+
     // Strip any fields not in the database schema
     const { id, created_at, ...rest } = data;
     const payload = {
@@ -1344,8 +1375,11 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       night_wakings_count: rest.night_wakings_count || null,
       night_wakings_notes: rest.night_wakings_notes || null,
       daytime_notes: rest.daytime_notes || null,
-      ...calcs,
+      total_nap_mins: totalNapMins,
+      night_sleep_mins: nightSleep,
+      total_sleep_24h: total24h,
     };
+
     // Try update first, then insert if no row exists
     const { data: existing } = await supabase
       .from("sleep_diary").select("id").eq("client_id", clientId).eq("date", date).single();
@@ -1404,7 +1438,9 @@ function SleepDiaryViewer({ clientId, isCoach }) {
 
   if (loading || !entry) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
 
-  const calcs = calcSleep(entry);
+  const totalNapMins = calcNapMins(entry);
+  const nightSleepMins = entry.night_sleep_mins || null;
+  const total24h = totalNapMins + (nightSleepMins || 0);
   const bookingUnlocked = !isCoach && diaryCount >= DIARY_DAYS_REQUIRED;
   const daysRemaining = Math.max(0, DIARY_DAYS_REQUIRED - diaryCount);
 
@@ -1485,9 +1521,9 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       {/* Calculations summary */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10, marginBottom: 20 }}>
         {[
-          { label: "Total nap sleep", value: fmtDuration(calcs.total_nap_mins) },
-          { label: "Night sleep", value: fmtDuration(calcs.night_sleep_mins) },
-          { label: "Total sleep (24h)", value: fmtDuration(calcs.total_sleep_24h) },
+          { label: "Total nap sleep", value: fmtDuration(totalNapMins) },
+          { label: "Night sleep", value: nightSleepMins ? fmtDuration(nightSleepMins) : "Enter wake & prev bedtime" },
+          { label: "Total sleep (24h)", value: fmtDuration(total24h) },
           { label: "Naps today", value: entry.naps?.filter(n => n.start && n.end).length || 0 },
         ].map((s) => (
           <div key={s.label} style={{ background: C.terracottaLight, borderRadius: 10, padding: "12px 14px" }}>
@@ -1982,25 +2018,37 @@ function SleepAnalysis({ client }) {
 }
 
 // ── SLEEP CALCULATIONS ──────────────────────────────────────────────────────
-function calcSleep(entry) {
-  const { wake_time, bed_time, naps = [] } = entry;
-
-  const totalNapMins = naps.reduce((acc, n) => {
+function calcNapMins(entry) {
+  const { naps = [] } = entry;
+  return naps.reduce((acc, n) => {
     if (n.start && n.end) {
-      return acc + diffMins(parseTime(n.start), parseTime(n.end));
+      const dur = diffMins(parseTime(n.start), parseTime(n.end));
+      return acc + (dur > 0 && dur < 480 ? dur : 0);
     }
     return acc;
   }, 0);
+}
 
-  let nightSleep = null;
-  if (bed_time && wake_time) {
-    nightSleep = diffMins(parseTime(bed_time), parseTime(wake_time));
-    if (nightSleep > 720) nightSleep = null; // sanity check
-  }
+// Night sleep = previous day bed_time until current day wake_time
+// This must be called with both entries available
+function calcNightSleep(prevBedTime, todayWakeTime) {
+  if (!prevBedTime || !todayWakeTime) return null;
+  const bedMins = parseTime(prevBedTime);
+  const wakeMins = parseTime(todayWakeTime);
+  if (bedMins === null || wakeMins === null) return null;
+  // Bed time is PM, wake time is AM next day — add 1440 if wake < bed
+  let night = wakeMins - bedMins;
+  if (night < 0) night += 1440;
+  // Sanity check: night sleep should be between 4h and 14h
+  if (night < 240 || night > 840) return null;
+  return night;
+}
 
+function calcSleep(entry) {
+  const totalNapMins = calcNapMins(entry);
   return {
     total_nap_mins: totalNapMins,
-    night_sleep_mins: nightSleep,
-    total_sleep_24h: totalNapMins + (nightSleep || 0),
+    night_sleep_mins: null, // calculated cross-day in doSave
+    total_sleep_24h: totalNapMins, // updated after night sleep is known
   };
 }
