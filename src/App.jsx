@@ -1145,33 +1145,85 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const [responses, setResponses] = useState({});
   const [section, setSection] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [existingId, setExistingId] = useState(null);
+  const saveTimerRef = useRef(null);
 
+  // Load existing responses on mount
   useEffect(() => {
-    if (hasIntake) {
-      supabase.from("intake_responses").select("*").eq("client_id", clientId).single()
-        .then(({ data }) => { if (data) { setResponses(data); setLoaded(true); } });
-    } else {
-      setLoaded(true);
-    }
-  }, [clientId, hasIntake]);
+    supabase.from("intake_responses").select("*")
+      .eq("client_id", clientId).single()
+      .then(({ data }) => {
+        if (data) {
+          setResponses(data);
+          setExistingId(data.id);
+        }
+        setLoaded(true);
+      });
+  }, [clientId]);
+
+  // Auto-save to Supabase whenever responses change (debounced 800ms)
+  useEffect(() => {
+    if (!loaded || Object.keys(responses).length === 0) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      setSaving(true);
+      if (existingId) {
+        await supabase.from("intake_responses")
+          .update(responses).eq("client_id", clientId);
+      } else {
+        const { data: inserted } = await supabase.from("intake_responses")
+          .insert({ ...responses, client_id: clientId })
+          .select("id").single();
+        if (inserted?.id) setExistingId(inserted.id);
+      }
+      setSaving(false);
+      setSavedMsg(true);
+      setTimeout(() => setSavedMsg(false), 2000);
+    }, 800);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [responses, loaded]);
 
   const set = (key, val) => setResponses((r) => ({ ...r, [key]: val }));
 
+  // Save immediately then move section
+  const goToSection = async (next) => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setSaving(true);
+    if (existingId) {
+      await supabase.from("intake_responses")
+        .update(responses).eq("client_id", clientId);
+    } else {
+      const { data: inserted } = await supabase.from("intake_responses")
+        .insert({ ...responses, client_id: clientId })
+        .select("id").single();
+      if (inserted?.id) setExistingId(inserted.id);
+    }
+    setSaving(false);
+    setSection(next);
+    window.scrollTo(0, 0);
+  };
+
   const submit = async () => {
     setSaving(true);
-    if (hasIntake) {
-      await supabase.from("intake_responses").update(responses).eq("client_id", clientId);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    if (existingId) {
+      await supabase.from("intake_responses")
+        .update(responses).eq("client_id", clientId);
     } else {
-      await supabase.from("intake_responses").insert({ ...responses, client_id: clientId });
-      // Notify coach by email via Supabase Edge Function
+      await supabase.from("intake_responses")
+        .insert({ ...responses, client_id: clientId });
+    }
+    // Send email notification only on first submission
+    if (!hasIntake) {
       try {
         const { data: clientData } = await supabase
           .from("clients").select("name").eq("id", clientId).single();
         await supabase.functions.invoke("notify-intake", {
           body: { clientName: clientData?.name || "A client", clientId },
         });
-      } catch (e) { /* silent fail — don't block the client */ }
+      } catch (e) { /* silent fail */ }
     }
     setSaving(false);
     onComplete();
@@ -1260,16 +1312,21 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
 
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         {section > 0 && (
-          <button style={{ ...gStyle.btnSecondary, flex: 1 }} onClick={() => setSection((s) => s - 1)}>Back</button>
+          <button style={{ ...gStyle.btnSecondary, flex: 1 }} onClick={() => goToSection(section - 1)} disabled={saving}>Back</button>
         )}
         {isLast ? (
           <button style={{ ...gStyle.btnPrimary, flex: 1 }} onClick={submit} disabled={saving}>
             {saving ? "Saving…" : "Submit Questionnaire"}
           </button>
         ) : (
-          <button style={{ ...gStyle.btnPrimary, flex: 1 }} onClick={() => setSection((s) => s + 1)}>Next →</button>
+          <button style={{ ...gStyle.btnPrimary, flex: 1 }} onClick={() => goToSection(section + 1)} disabled={saving}>
+            {saving ? "Saving…" : "Next →"}
+          </button>
         )}
       </div>
+      <p style={{ textAlign: "center", fontSize: 12, color: savedMsg ? C.success : C.muted, marginTop: 12 }}>
+        {savedMsg ? "✓ Progress saved" : saving ? "Saving…" : "Your answers are saved automatically"}
+      </p>
     </div>
   );
 }
