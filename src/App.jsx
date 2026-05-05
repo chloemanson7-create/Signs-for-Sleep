@@ -12,6 +12,34 @@ const COACH_PASSWORD = "sleep2024"; // Change this via Settings inside the app
 const DEFAULT_SUPPORT_DAYS = 28;
 const DEFAULT_CONTACT_EVERY = 7;
 
+// Generate time options in 15-min increments for 24hr period
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, i) => {
+  const totalMins = i * 15;
+  const h24 = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  const val = `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+  const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24;
+  const ampm = h24 < 12 ? "am" : "pm";
+  const label = `${h12}:${String(m).padStart(2,"0")}${ampm}`;
+  return { val, label };
+});
+
+function TimeSelect({ value, onChange, disabled, placeholder }) {
+  return (
+    <select
+      style={{ ...gStyle.input, cursor: disabled ? "default" : "pointer" }}
+      value={value || ""}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+    >
+      <option value="">{placeholder || "Select time…"}</option>
+      {TIME_OPTIONS.map(({ val, label }) => (
+        <option key={val} value={val}>{label}</option>
+      ))}
+    </select>
+  );
+}
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ── PALETTE & STYLES ───────────────────────────────────────────────────────
@@ -880,15 +908,18 @@ function ClientOverview({ client, onRefresh }) {
 
 function IntakeViewer({ clientId }) {
   const [intake, setIntake] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     supabase.from("intake_responses").select("*").eq("client_id", clientId).single()
-      .then(({ data }) => setIntake(data));
+      .then(({ data }) => { setIntake(data); setLoading(false); });
   }, [clientId]);
 
-  if (!intake) return (
+  if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
+
+  if (!intake || !intake.completed) return (
     <div style={{ ...gStyle.card, color: C.muted, textAlign: "center", padding: 40 }}>
-      Client hasn't completed their intake questionnaire yet.
+      {intake ? "Client has started but not yet submitted their intake questionnaire." : "Client hasn't completed their intake questionnaire yet."}
     </div>
   );
 
@@ -1087,10 +1118,12 @@ function ClientApp({ session, onLogout }) {
   const [hasIntake, setHasIntake] = useState(null);
 
   useEffect(() => {
-    supabase.from("intake_responses").select("id").eq("client_id", session.clientId).single()
+    supabase.from("intake_responses").select("id, completed")
+      .eq("client_id", session.clientId).single()
       .then(({ data }) => {
-        setHasIntake(!!data);
-        if (!data) setTab("intake");
+        const done = !!(data?.completed);
+        setHasIntake(done);
+        if (!done) setTab("intake");
       });
   }, [session.clientId]);
 
@@ -1208,22 +1241,23 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const submit = async () => {
     setSaving(true);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    const isFirstSubmit = !hasIntake;
     if (existingId) {
       await supabase.from("intake_responses")
-        .update(responses).eq("client_id", clientId);
+        .update({ ...responses, completed: true }).eq("client_id", clientId);
     } else {
       await supabase.from("intake_responses")
-        .insert({ ...responses, client_id: clientId });
+        .insert({ ...responses, client_id: clientId, completed: true });
     }
     // Send email notification only on first submission
-    if (!hasIntake) {
+    if (isFirstSubmit) {
       try {
         const { data: clientData } = await supabase
           .from("clients").select("name").eq("id", clientId).single();
         await supabase.functions.invoke("notify-intake", {
           body: { clientName: clientData?.name || "A client", clientId },
         });
-      } catch (e) { /* silent fail */ }
+      } catch (e) { console.error("Email notify error:", e); }
     }
     setSaving(false);
     onComplete();
@@ -1595,9 +1629,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
         <h3 style={{ fontFamily: font.display, color: C.blue, margin: "0 0 4px" }}>Morning Wake</h3>
         <p style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>Enter times in 24hr format — e.g. 07:00, 13:30, 19:45</p>
         <label style={gStyle.label}>Wake time</label>
-        <input type="text" style={gStyle.input} value={entry.wake_time || ""}
-          onChange={(e) => update("wake_time", e.target.value)} disabled={isCoach}
-          placeholder="e.g. 07:00" />
+        <TimeSelect value={entry.wake_time} onChange={(v) => update("wake_time", v)} disabled={isCoach} placeholder="Select wake time…" />
       </div>
 
       {/* Naps */}
@@ -1636,15 +1668,11 @@ function SleepDiaryViewer({ clientId, isCoach }) {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <div>
                   <label style={gStyle.label}>Start</label>
-                  <input type="text" style={gStyle.input} value={nap.start || ""}
-                    onChange={(e) => updateNap(idx, "start", e.target.value)} disabled={isCoach}
-                    placeholder="e.g. 12:30" />
+                  <TimeSelect value={nap.start} onChange={(v) => updateNap(idx, "start", v)} disabled={isCoach} placeholder="Start…" />
                 </div>
                 <div>
                   <label style={gStyle.label}>End</label>
-                  <input type="text" style={gStyle.input} value={nap.end || ""}
-                    onChange={(e) => updateNap(idx, "end", e.target.value)} disabled={isCoach}
-                    placeholder="e.g. 13:30" />
+                  <TimeSelect value={nap.end} onChange={(v) => updateNap(idx, "end", v)} disabled={isCoach} placeholder="End…" />
                 </div>
               </div>
               <div style={{ marginBottom: 10 }}>
@@ -1704,22 +1732,16 @@ function SleepDiaryViewer({ clientId, isCoach }) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div>
             <label style={gStyle.label}>Bedtime routine started</label>
-            <input type="text" style={gStyle.input} value={entry.routine_start_time || ""}
-              onChange={(e) => update("routine_start_time", e.target.value)} disabled={isCoach}
-              placeholder="e.g. 18:30" />
+            <TimeSelect value={entry.routine_start_time} onChange={(v) => update("routine_start_time", v)} disabled={isCoach} placeholder="Select time…" />
           </div>
           <div>
             <label style={gStyle.label}>Time into bed</label>
-            <input type="text" style={gStyle.input} value={entry.into_bed_time || ""}
-              onChange={(e) => update("into_bed_time", e.target.value)} disabled={isCoach}
-              placeholder="e.g. 19:00" />
+            <TimeSelect value={entry.into_bed_time} onChange={(v) => update("into_bed_time", v)} disabled={isCoach} placeholder="Select time…" />
           </div>
         </div>
         <div style={{ marginBottom: 12 }}>
           <label style={gStyle.label}>Time went to sleep</label>
-          <input type="text" style={gStyle.input} value={entry.bed_time || ""}
-            onChange={(e) => update("bed_time", e.target.value)} disabled={isCoach}
-            placeholder="e.g. 19:30" />
+          <TimeSelect value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginBottom: 12 }}>
           <div>
