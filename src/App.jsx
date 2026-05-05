@@ -1206,18 +1206,33 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
       });
   }, [clientId]);
 
-  // Core save function — always upserts by client_id
+  // Core save function — check if row exists then insert or update
   const saveNow = async (data, markCompleted = false) => {
     // Strip system fields
-    const { id, client_id, created_at, ...fields } = data;
+    const { id, client_id, created_at, completed, ...fields } = data;
     const payload = {
       ...fields,
-      client_id: clientId,
-      completed: markCompleted ? true : (data.completed || false),
+      completed: markCompleted ? true : false,
     };
-    const { error } = await supabase
+    // Check if a row already exists for this client
+    const { data: existing } = await supabase
       .from("intake_responses")
-      .upsert(payload, { onConflict: "client_id" });
+      .select("id")
+      .eq("client_id", clientId)
+      .maybeSingle();
+    let error;
+    if (existing?.id) {
+      // Row exists — update it
+      ({ error } = await supabase
+        .from("intake_responses")
+        .update(payload)
+        .eq("id", existing.id));
+    } else {
+      // No row yet — insert one
+      ({ error } = await supabase
+        .from("intake_responses")
+        .insert({ ...payload, client_id: clientId }));
+    }
     if (error) console.error("Intake save error:", error);
     return !error;
   };
