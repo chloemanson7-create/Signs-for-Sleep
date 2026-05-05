@@ -202,6 +202,8 @@ const TIME_OPTIONS = Array.from({ length: 1440 }, (_, i) => {
 });
 
 function TimeSelect({ value, onChange, disabled, placeholder }) {
+  // Supabase returns times as HH:MM:SS — strip seconds to match our HH:MM options
+  const normalised = value ? value.slice(0, 5) : "";
   return (
     <select
       style={{
@@ -219,7 +221,7 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
         appearance: "auto",
         WebkitAppearance: "auto",
       }}
-      value={value || ""}
+      value={normalised}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
     >
@@ -1422,7 +1424,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
         .select("*")
         .eq("client_id", clientId)
         .eq("date", selectedDate)
-        .single();
+        .maybeSingle();
       if (!cancelled) {
         setEntry(data ? { ...data, naps: data.naps || [emptyNap()] } : emptyEntry());
         setLoading(false);
@@ -1446,7 +1448,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     const prevDateStr = prevDate.toISOString().split("T")[0];
     const { data: prevEntry } = await supabase
       .from("sleep_diary").select("bed_time")
-      .eq("client_id", clientId).eq("date", prevDateStr).single();
+      .eq("client_id", clientId).eq("date", prevDateStr).maybeSingle();
     const nightSleep = calcNightSleep(prevEntry?.bed_time, data.wake_time);
     const total24h = totalNapMins + (nightSleep || 0);
 
@@ -1456,7 +1458,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     const nextDateStr = nextDate.toISOString().split("T")[0];
     const { data: nextEntry } = await supabase
       .from("sleep_diary").select("id, wake_time, total_nap_mins")
-      .eq("client_id", clientId).eq("date", nextDateStr).single();
+      .eq("client_id", clientId).eq("date", nextDateStr).maybeSingle();
     if (nextEntry?.id && data.bed_time) {
       const nextNightSleep = calcNightSleep(data.bed_time, nextEntry.wake_time);
       if (nextNightSleep !== null) {
@@ -1489,7 +1491,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
 
     // Try update first, then insert if no row exists
     const { data: existing } = await supabase
-      .from("sleep_diary").select("id").eq("client_id", clientId).eq("date", date).single();
+      .from("sleep_diary").select("id").eq("client_id", clientId).eq("date", date).maybeSingle();
     let error;
     if (existing?.id) {
       ({ error } = await supabase.from("sleep_diary").update(payload).eq("id", existing.id));
