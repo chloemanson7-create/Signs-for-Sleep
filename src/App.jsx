@@ -169,8 +169,8 @@ const fromMin = (mins) => {
 };
 const parseTime = (t) => {
   if (!t) return null;
-  const parts = t.split(":").map(Number);
-  return parts[0] * 60 + (parts[1] || 0); // handles HH:MM and HH:MM:SS
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + (m || 0);
 };
 const diffMins = (start, end) => {
   let d = end - start;
@@ -188,48 +188,6 @@ const fmtDuration = (mins) => {
 const today = () => new Date().toISOString().split("T")[0];
 const daysBetween = (a, b) =>
   Math.floor((new Date(b) - new Date(a)) / 86400000);
-
-// ── TIME SELECT COMPONENT ─────────────────────────────────────────────────
-// 1-minute increment options for full day (00:00 to 23:59)
-const TIME_OPTIONS = Array.from({ length: 1440 }, (_, i) => {
-  const h24 = Math.floor(i / 60);
-  const m = i % 60;
-  const val = `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
-  const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24;
-  const ampm = h24 < 12 ? "am" : "pm";
-  const label = `${h12}:${String(m).padStart(2,"0")}${ampm}`;
-  return { val, label };
-});
-
-function TimeSelect({ value, onChange, disabled, placeholder }) {
-  return (
-    <select
-      style={{
-        width: "100%",
-        padding: "10px 14px",
-        border: `1px solid rgba(196,113,74,0.18)`,
-        borderRadius: 8,
-        fontFamily: "'DM Sans', system-ui, sans-serif",
-        fontSize: 14,
-        background: "#FFFFFF",
-        color: "#2C2420",
-        outline: "none",
-        boxSizing: "border-box",
-        cursor: disabled ? "default" : "pointer",
-        appearance: "auto",
-        WebkitAppearance: "auto",
-      }}
-      value={value || ""}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={disabled}
-    >
-      <option value="">{placeholder || "Select time…"}</option>
-      {TIME_OPTIONS.map(({ val, label }) => (
-        <option key={val} value={val}>{label}</option>
-      ))}
-    </select>
-  );
-}
 
 // ── INTAKE QUESTIONS ───────────────────────────────────────────────────────
 const PRONOUNS = ["She/her", "They/them", "He/him", "Prefer not to say"];
@@ -804,7 +762,6 @@ function ClientDetail({ client, onBack, onRefresh }) {
     { key: "overview", label: "Overview" },
     { key: "intake", label: "Intake" },
     { key: "diary", label: "Sleep Diary" },
-    { key: "analysis", label: "📊 Analysis" },
     { key: "notes", label: "Notes" },
     { key: "settings", label: "Settings" },
   ];
@@ -835,7 +792,6 @@ function ClientDetail({ client, onBack, onRefresh }) {
       {tab === "overview" && <ClientOverview client={clientData} onRefresh={refresh} />}
       {tab === "intake" && <IntakeViewer clientId={client.id} />}
       {tab === "diary" && <SleepDiaryViewer clientId={client.id} isCoach />}
-      {tab === "analysis" && <SleepAnalysis client={clientData} />}
       {tab === "notes" && <CoachNotes clientId={client.id} />}
       {tab === "settings" && <ClientSettings client={clientData} onRefresh={refresh} onDelete={onBack} />}
     </>
@@ -922,18 +878,15 @@ function ClientOverview({ client, onRefresh }) {
 
 function IntakeViewer({ clientId }) {
   const [intake, setIntake] = useState(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     supabase.from("intake_responses").select("*").eq("client_id", clientId).single()
-      .then(({ data }) => { setIntake(data); setLoading(false); });
+      .then(({ data }) => setIntake(data));
   }, [clientId]);
 
-  if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
-
-  if (!intake || !intake.completed) return (
+  if (!intake) return (
     <div style={{ ...gStyle.card, color: C.muted, textAlign: "center", padding: 40 }}>
-      {intake ? "Client has started but not yet submitted their intake questionnaire." : "Client hasn't completed their intake questionnaire yet."}
+      Client hasn't completed their intake questionnaire yet.
     </div>
   );
 
@@ -1132,12 +1085,10 @@ function ClientApp({ session, onLogout }) {
   const [hasIntake, setHasIntake] = useState(null);
 
   useEffect(() => {
-    supabase.from("intake_responses").select("id, completed")
-      .eq("client_id", session.clientId).single()
+    supabase.from("intake_responses").select("id").eq("client_id", session.clientId).single()
       .then(({ data }) => {
-        const done = !!(data?.completed);
-        setHasIntake(done);
-        if (!done) setTab("intake");
+        setHasIntake(!!data);
+        if (!data) setTab("intake");
       });
   }, [session.clientId]);
 
@@ -1192,96 +1143,33 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const [responses, setResponses] = useState({});
   const [section, setSection] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [savedMsg, setSavedMsg] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [existingId, setExistingId] = useState(null);
-  const saveTimerRef = useRef(null);
 
-  // Load existing responses on mount
   useEffect(() => {
-    supabase.from("intake_responses").select("*")
-      .eq("client_id", clientId).single()
-      .then(({ data }) => {
-        if (data) {
-          setResponses(data);
-          setExistingId(data.id);
-        }
-        setLoaded(true);
-      });
-  }, [clientId]);
-
-  // Strip system fields before saving
-  const cleanResponses = (r) => {
-    const { id, client_id, created_at, completed, ...fields } = r;
-    return fields;
-  };
-
-  // Auto-save to Supabase whenever responses change (debounced 800ms)
-  useEffect(() => {
-    if (!loaded || Object.keys(responses).length === 0) return;
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(async () => {
-      setSaving(true);
-      const fields = cleanResponses(responses);
-      if (existingId) {
-        const { error } = await supabase.from("intake_responses")
-          .update(fields).eq("client_id", clientId);
-        if (error) console.error("Intake auto-save error:", error);
-      } else {
-        const { data: inserted, error } = await supabase.from("intake_responses")
-          .insert({ ...fields, client_id: clientId, completed: false })
-          .select("id").single();
-        if (error) console.error("Intake insert error:", error);
-        if (inserted?.id) setExistingId(inserted.id);
-      }
-      setSaving(false);
-      setSavedMsg(true);
-      setTimeout(() => setSavedMsg(false), 2000);
-    }, 800);
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
-  }, [responses, loaded]);
+    if (hasIntake) {
+      supabase.from("intake_responses").select("*").eq("client_id", clientId).single()
+        .then(({ data }) => { if (data) { setResponses(data); setLoaded(true); } });
+    } else {
+      setLoaded(true);
+    }
+  }, [clientId, hasIntake]);
 
   const set = (key, val) => setResponses((r) => ({ ...r, [key]: val }));
 
-  // Save immediately then move section
-  const goToSection = async (next) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    setSaving(true);
-    const fields = cleanResponses(responses);
-    if (existingId) {
-      await supabase.from("intake_responses")
-        .update(fields).eq("client_id", clientId);
-    } else {
-      const { data: inserted } = await supabase.from("intake_responses")
-        .insert({ ...fields, client_id: clientId, completed: false })
-        .select("id").single();
-      if (inserted?.id) setExistingId(inserted.id);
-    }
-    setSaving(false);
-    setSection(next);
-    window.scrollTo(0, 0);
-  };
-
   const submit = async () => {
     setSaving(true);
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    const isFirstSubmit = !hasIntake;
-    const fields = cleanResponses(responses);
-    if (existingId) {
-      await supabase.from("intake_responses")
-        .update({ ...fields, completed: true }).eq("client_id", clientId);
+    if (hasIntake) {
+      await supabase.from("intake_responses").update(responses).eq("client_id", clientId);
     } else {
-      await supabase.from("intake_responses")
-        .insert({ ...fields, client_id: clientId, completed: true });
-    }
-    if (isFirstSubmit) {
+      await supabase.from("intake_responses").insert({ ...responses, client_id: clientId });
+      // Notify coach by email via Supabase Edge Function
       try {
         const { data: clientData } = await supabase
           .from("clients").select("name").eq("id", clientId).single();
         await supabase.functions.invoke("notify-intake", {
           body: { clientName: clientData?.name || "A client", clientId },
         });
-      } catch (e) { console.error("Email notify error:", e); }
+      } catch (e) { /* silent fail — don't block the client */ }
     }
     setSaving(false);
     onComplete();
@@ -1370,21 +1258,16 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
 
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         {section > 0 && (
-          <button style={{ ...gStyle.btnSecondary, flex: 1 }} onClick={() => goToSection(section - 1)} disabled={saving}>Back</button>
+          <button style={{ ...gStyle.btnSecondary, flex: 1 }} onClick={() => setSection((s) => s - 1)}>Back</button>
         )}
         {isLast ? (
           <button style={{ ...gStyle.btnPrimary, flex: 1 }} onClick={submit} disabled={saving}>
             {saving ? "Saving…" : "Submit Questionnaire"}
           </button>
         ) : (
-          <button style={{ ...gStyle.btnPrimary, flex: 1 }} onClick={() => goToSection(section + 1)} disabled={saving}>
-            {saving ? "Saving…" : "Next →"}
-          </button>
+          <button style={{ ...gStyle.btnPrimary, flex: 1 }} onClick={() => setSection((s) => s + 1)}>Next →</button>
         )}
       </div>
-      <p style={{ textAlign: "center", fontSize: 12, color: savedMsg ? C.success : C.muted, marginTop: 12 }}>
-        {savedMsg ? "✓ Progress saved" : saving ? "Saving…" : "Your answers are saved automatically"}
-      </p>
     </div>
   );
 }
@@ -1444,38 +1327,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
   const doSave = async (data, date) => {
     if (!data) return;
     setSaving(true);
-
-    // Calculate nap total
-    const totalNapMins = calcNapMins(data);
-
-    // Look up previous day's bed_time to calculate night sleep
-    const prevDate = new Date(date + "T00:00:00");
-    prevDate.setDate(prevDate.getDate() - 1);
-    const prevDateStr = prevDate.toISOString().split("T")[0];
-    const { data: prevEntry } = await supabase
-      .from("sleep_diary").select("bed_time")
-      .eq("client_id", clientId).eq("date", prevDateStr).single();
-    const nightSleep = calcNightSleep(prevEntry?.bed_time, data.wake_time);
-    const total24h = totalNapMins + (nightSleep || 0);
-
-    // Also update TOMORROW's night sleep if today's bed_time changed
-    const nextDate = new Date(date + "T00:00:00");
-    nextDate.setDate(nextDate.getDate() + 1);
-    const nextDateStr = nextDate.toISOString().split("T")[0];
-    const { data: nextEntry } = await supabase
-      .from("sleep_diary").select("id, wake_time, total_nap_mins")
-      .eq("client_id", clientId).eq("date", nextDateStr).single();
-    if (nextEntry?.id && data.bed_time) {
-      const nextNightSleep = calcNightSleep(data.bed_time, nextEntry.wake_time);
-      if (nextNightSleep !== null) {
-        const nextTotal = (nextEntry.total_nap_mins || 0) + nextNightSleep;
-        await supabase.from("sleep_diary").update({
-          night_sleep_mins: nextNightSleep,
-          total_sleep_24h: nextTotal,
-        }).eq("id", nextEntry.id);
-      }
-    }
-
+    const calcs = calcSleep(data);
     // Strip any fields not in the database schema
     const { id, created_at, ...rest } = data;
     const payload = {
@@ -1490,11 +1342,8 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       night_wakings_count: rest.night_wakings_count || null,
       night_wakings_notes: rest.night_wakings_notes || null,
       daytime_notes: rest.daytime_notes || null,
-      total_nap_mins: totalNapMins,
-      night_sleep_mins: nightSleep,
-      total_sleep_24h: total24h,
+      ...calcs,
     };
-
     // Try update first, then insert if no row exists
     const { data: existing } = await supabase
       .from("sleep_diary").select("id").eq("client_id", clientId).eq("date", date).single();
@@ -1553,9 +1402,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
 
   if (loading || !entry) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
 
-  const totalNapMins = calcNapMins(entry);
-  const nightSleepMins = entry.night_sleep_mins || null;
-  const total24h = totalNapMins + (nightSleepMins || 0);
+  const calcs = calcSleep(entry);
   const bookingUnlocked = !isCoach && diaryCount >= DIARY_DAYS_REQUIRED;
   const daysRemaining = Math.max(0, DIARY_DAYS_REQUIRED - diaryCount);
 
@@ -1636,9 +1483,9 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       {/* Calculations summary */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10, marginBottom: 20 }}>
         {[
-          { label: "Total nap sleep", value: fmtDuration(totalNapMins) },
-          { label: "Night sleep", value: nightSleepMins ? fmtDuration(nightSleepMins) : "Enter wake & prev bedtime" },
-          { label: "Total sleep (24h)", value: fmtDuration(total24h) },
+          { label: "Total nap sleep", value: fmtDuration(calcs.total_nap_mins) },
+          { label: "Night sleep", value: fmtDuration(calcs.night_sleep_mins) },
+          { label: "Total sleep (24h)", value: fmtDuration(calcs.total_sleep_24h) },
           { label: "Naps today", value: entry.naps?.filter(n => n.start && n.end).length || 0 },
         ].map((s) => (
           <div key={s.label} style={{ background: C.terracottaLight, borderRadius: 10, padding: "12px 14px" }}>
@@ -1650,10 +1497,10 @@ function SleepDiaryViewer({ clientId, isCoach }) {
 
       {/* Wake time */}
       <div style={gStyle.card}>
-        <h3 style={{ fontFamily: font.display, color: C.blue, margin: "0 0 4px" }}>Morning Wake</h3>
-        <p style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>Enter times in 24hr format — e.g. 07:00, 13:30, 19:45</p>
+        <h3 style={{ fontFamily: font.display, color: C.blue, margin: "0 0 16px" }}>Morning Wake</h3>
         <label style={gStyle.label}>Wake time</label>
-        <TimeSelect value={entry.wake_time} onChange={(v) => update("wake_time", v)} disabled={isCoach} placeholder="Select wake time…" />
+        <input type="time" style={gStyle.input} value={entry.wake_time || ""}
+          onChange={(e) => update("wake_time", e.target.value)} disabled={isCoach} />
       </div>
 
       {/* Naps */}
@@ -1692,11 +1539,13 @@ function SleepDiaryViewer({ clientId, isCoach }) {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <div>
                   <label style={gStyle.label}>Start</label>
-                  <TimeSelect value={nap.start} onChange={(v) => updateNap(idx, "start", v)} disabled={isCoach} placeholder="Start…" />
+                  <input type="time" style={gStyle.input} value={nap.start || ""}
+                    onChange={(e) => updateNap(idx, "start", e.target.value)} disabled={isCoach} />
                 </div>
                 <div>
                   <label style={gStyle.label}>End</label>
-                  <TimeSelect value={nap.end} onChange={(v) => updateNap(idx, "end", v)} disabled={isCoach} placeholder="End…" />
+                  <input type="time" style={gStyle.input} value={nap.end || ""}
+                    onChange={(e) => updateNap(idx, "end", e.target.value)} disabled={isCoach} />
                 </div>
               </div>
               <div style={{ marginBottom: 10 }}>
@@ -1756,16 +1605,19 @@ function SleepDiaryViewer({ clientId, isCoach }) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div>
             <label style={gStyle.label}>Bedtime routine started</label>
-            <TimeSelect value={entry.routine_start_time} onChange={(v) => update("routine_start_time", v)} disabled={isCoach} placeholder="Select time…" />
+            <input type="time" style={gStyle.input} value={entry.routine_start_time || ""}
+              onChange={(e) => update("routine_start_time", e.target.value)} disabled={isCoach} />
           </div>
           <div>
             <label style={gStyle.label}>Time into bed</label>
-            <TimeSelect value={entry.into_bed_time} onChange={(v) => update("into_bed_time", v)} disabled={isCoach} placeholder="Select time…" />
+            <input type="time" style={gStyle.input} value={entry.into_bed_time || ""}
+              onChange={(e) => update("into_bed_time", e.target.value)} disabled={isCoach} />
           </div>
         </div>
         <div style={{ marginBottom: 12 }}>
           <label style={gStyle.label}>Time went to sleep</label>
-          <TimeSelect value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
+          <input type="time" style={gStyle.input} value={entry.bed_time || ""}
+            onChange={(e) => update("bed_time", e.target.value)} disabled={isCoach} />
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginBottom: 12 }}>
           <div>
@@ -1804,354 +1656,26 @@ function SleepDiaryViewer({ clientId, isCoach }) {
   );
 }
 
-// ── SLEEP ANALYSIS ───────────────────────────────────────────────────────────
-function SleepAnalysis({ client }) {
-  const [entries, setEntries] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    supabase.from("sleep_diary").select("*")
-      .eq("client_id", client.id)
-      .order("date", { ascending: true })
-      .then(({ data }) => {
-        setEntries(data || []);
-        setLoading(false);
-      });
-  }, [client.id]);
-
-  if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading analysis…</p>;
-  if (entries.length === 0) return (
-    <div style={{ ...gStyle.card, textAlign: "center", padding: 48, color: C.muted }}>
-      No sleep diary entries yet for this client.
-    </div>
-  );
-
-  // ── Compute metrics per day ──────────────────────────────
-  const days = entries.map(e => {
-    const napMins = e.total_nap_mins || 0;
-    const nightMins = e.night_sleep_mins || null;
-    const totalMins = e.total_sleep_24h || 0;
-    const napCount = Array.isArray(e.naps) ? e.naps.filter(n => n.start && n.end).length : 0;
-
-    // Wake windows: time from wake to first nap, between naps, last nap to bed
-    const wakeWindows = [];
-    const naps = Array.isArray(e.naps) ? e.naps.filter(n => n.start && n.end) : [];
-    if (e.wake_time && naps.length > 0 && naps[0].start) {
-      const ww = diffMins(parseTime(e.wake_time), parseTime(naps[0].start));
-      if (ww > 0 && ww < 600) wakeWindows.push(ww);
-    }
-    for (let i = 0; i < naps.length - 1; i++) {
-      if (naps[i].end && naps[i+1].start) {
-        const ww = diffMins(parseTime(naps[i].end), parseTime(naps[i+1].start));
-        if (ww > 0 && ww < 600) wakeWindows.push(ww);
-      }
-    }
-    const lastNapEnd = naps.length > 0 ? naps[naps.length-1].end : null;
-    if (lastNapEnd && e.bed_time) {
-      const ww = diffMins(parseTime(lastNapEnd), parseTime(e.bed_time));
-      if (ww > 0 && ww < 600) wakeWindows.push(ww);
-    }
-    const avgWW = wakeWindows.length > 0
-      ? Math.round(wakeWindows.reduce((a,b) => a+b,0) / wakeWindows.length) : null;
-
-    const nightWakings = e.night_wakings_count !== null && e.night_wakings_count !== ""
-      ? parseInt(e.night_wakings_count) : null;
-    const wakeTime = e.wake_time || null;
-
-    return {
-      date: e.date,
-      label: new Date(e.date + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "short" }),
-      napMins, nightMins, totalMins, napCount, avgWW, nightWakings, wakeTime,
-    };
-  });
-
-  // ── Averages ─────────────────────────────────────────────
-  const avg = (arr) => {
-    const valid = arr.filter(v => v !== null && v > 0);
-    return valid.length > 0 ? Math.round(valid.reduce((a,b) => a+b,0) / valid.length) : null;
-  };
-  const avgNap = avg(days.map(d => d.napMins));
-  const avgNight = avg(days.map(d => d.nightMins));
-  const avgTotal = avg(days.map(d => d.totalMins));
-  const avgNapCount = avg(days.map(d => d.napCount));
-  const avgWW = avg(days.map(d => d.avgWW));
-  const avgNightWakings = avg(days.map(d => d.nightWakings));
-
-  // ── SVG line chart helper ─────────────────────────────────
-  const LineChart = ({ data, color, label, yLabel }) => {
-    const valid = data.filter(d => d.value !== null && d.value > 0);
-    if (valid.length < 2) return (
-      <div style={{ textAlign: "center", color: C.muted, fontSize: 13, padding: "20px 0" }}>
-        Not enough data to show trend
-      </div>
-    );
-    const W = 560, H = 160, PAD = { top: 16, right: 16, bottom: 36, left: 48 };
-    const minV = Math.min(...valid.map(d => d.value));
-    const maxV = Math.max(...valid.map(d => d.value));
-    const rangeV = maxV - minV || 60;
-    const xScale = (i) => PAD.left + (i / (data.length - 1)) * (W - PAD.left - PAD.right);
-    const yScale = (v) => PAD.top + (1 - (v - (minV - 15)) / (rangeV + 30)) * (H - PAD.top - PAD.bottom);
-
-    const points = data.map((d, i) => ({
-      x: xScale(i), y: d.value ? yScale(d.value) : null, ...d,
-    }));
-    const validPoints = points.filter(p => p.y !== null);
-    const pathD = validPoints.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
-
-    // Y axis ticks
-    const ticks = 4;
-    const tickVals = Array.from({ length: ticks }, (_, i) =>
-      Math.round((minV - 15) + (i / (ticks-1)) * (rangeV + 30))
-    );
-
-    return (
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", overflow: "visible" }}>
-        {/* Grid lines */}
-        {tickVals.map(v => (
-          <line key={v} x1={PAD.left} x2={W - PAD.right}
-            y1={yScale(v)} y2={yScale(v)}
-            stroke={C.border} strokeWidth="1" />
-        ))}
-        {/* Y axis labels */}
-        {tickVals.map(v => (
-          <text key={v} x={PAD.left - 6} y={yScale(v) + 4}
-            textAnchor="end" fontSize="10" fill={C.muted}>
-            {yLabel === "mins" ? fmtDuration(v) : yLabel === "time" ? fromMin(v) : v}
-          </text>
-        ))}
-        {/* X axis labels — show every other one if many entries */}
-        {points.map((p, i) => (
-          (i % Math.ceil(points.length / 10) === 0) && (
-            <text key={i} x={p.x} y={H - 4}
-              textAnchor="middle" fontSize="9" fill={C.muted}>
-              {p.label}
-            </text>
-          )
-        ))}
-        {/* Line */}
-        <path d={pathD} fill="none" stroke={color} strokeWidth="2.5"
-          strokeLinecap="round" strokeLinejoin="round" />
-        {/* Dots */}
-        {validPoints.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r="4" fill={color} stroke="white" strokeWidth="1.5">
-            <title>{p.label}: {yLabel === "mins" ? fmtDuration(p.value) : yLabel === "time" ? (p.displayValue || fromMin(p.value)) : yLabel === "naps" ? p.value + " naps" : yLabel === "wakings" ? p.value + " wakings" : p.value}</title>
-          </circle>
-        ))}
-        {/* Average line */}
-        {avg([...valid.map(d => d.value)]) && (
-          <line x1={PAD.left} x2={W - PAD.right}
-            y1={yScale(avg(valid.map(d => d.value)))}
-            y2={yScale(avg(valid.map(d => d.value)))}
-            stroke={color} strokeWidth="1" strokeDasharray="4 4" opacity="0.5" />
-        )}
-      </svg>
-    );
-  };
-
-  const charts = [
-    {
-      label: "Total Nap Sleep",
-      avg: avgNap,
-      color: C.blue,
-      data: days.map(d => ({ label: d.label, value: d.napMins })),
-      yLabel: "mins",
-    },
-    {
-      label: "Night Sleep",
-      avg: avgNight,
-      color: C.terracotta,
-      data: days.map(d => ({ label: d.label, value: d.nightMins })),
-      yLabel: "mins",
-    },
-    {
-      label: "Total Sleep in 24h",
-      avg: avgTotal,
-      color: C.gold,
-      data: days.map(d => ({ label: d.label, value: d.totalMins })),
-      yLabel: "mins",
-    },
-    {
-      label: "Number of Naps",
-      avg: avgNapCount,
-      color: C.blueDark,
-      data: days.map(d => ({ label: d.label, value: d.napCount })),
-      yLabel: "naps",
-    },
-    {
-      label: "Average Wake Window",
-      avg: avgWW,
-      color: C.terracottaDark,
-      data: days.map(d => ({ label: d.label, value: d.avgWW })),
-      yLabel: "mins",
-    },
-    {
-      label: "Night Wakings",
-      avg: avgNightWakings,
-      color: C.blueDark,
-      data: days.map(d => ({ label: d.label, value: d.nightWakings })),
-      yLabel: "wakings",
-    },
-    {
-      label: "Morning Wake Time",
-      avg: null,
-      color: C.gold,
-      data: days.map(d => ({
-        label: d.label,
-        value: d.wakeTime ? parseTime(d.wakeTime) : null,
-        displayValue: d.wakeTime || null,
-      })),
-      yLabel: "time",
-    },
-  ];
-
-  return (
-    <div>
-      {/* Print button */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}
-        className="no-print">
-        <div>
-          <h2 style={{ fontFamily: font.display, fontSize: 22, color: C.terracotta, margin: 0 }}>
-            Sleep Analysis
-          </h2>
-          <p style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>
-            Based on {entries.length} day{entries.length !== 1 ? "s" : ""} of diary data
-          </p>
-        </div>
-        <button
-          style={{ ...gStyle.btnGold, display: "flex", alignItems: "center", gap: 8 }}
-          onClick={() => window.print()}
-        >
-          🖨 Print / Save as PDF
-        </button>
-      </div>
-
-      {/* Print header — only shows when printing */}
-      <div className="print-only" style={{ display: "none", marginBottom: 24 }}>
-        <div style={{ fontFamily: font.display, fontSize: 24, color: C.terracotta }}>Signs for Sleep</div>
-        <div style={{ fontSize: 12, color: C.gold, letterSpacing: "0.1em", textTransform: "uppercase" }}>Gentle Sleep Consultant</div>
-        <div style={{ marginTop: 8, fontSize: 16, fontWeight: 700 }}>Sleep Analysis — {client.name}</div>
-        <div style={{ fontSize: 12, color: C.muted }}>Generated {new Date().toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })}</div>
-        <hr style={{ borderColor: C.border, margin: "12px 0" }} />
-      </div>
-
-      {/* Summary cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px,1fr))", gap: 12, marginBottom: 28 }}>
-        {[
-          { label: "Avg nap sleep", value: fmtDuration(avgNap), color: C.blue, sub: `${avgNapCount ?? "—"} naps/day` },
-          { label: "Avg night sleep", value: fmtDuration(avgNight), color: C.terracotta, sub: "per night" },
-          { label: "Avg total 24h", value: fmtDuration(avgTotal), color: C.gold, sub: "all sleep" },
-          { label: "Avg wake window", value: fmtDuration(avgWW), color: C.blueDark, sub: "between sleeps" },
-          { label: "Avg night wakings", value: avgNightWakings !== null ? avgNightWakings : "—", color: C.terracottaDark, sub: "times per night" },
-          { label: "Days logged", value: entries.length, color: C.mid, sub: "diary entries" },
-        ].map((s) => (
-          <div key={s.label} style={{
-            background: C.white, border: `1px solid ${C.border}`,
-            borderRadius: 12, padding: "16px 14px",
-          }}>
-            <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>{s.label}</div>
-            <div style={{ fontSize: 26, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value ?? "—"}</div>
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{s.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Charts */}
-      {charts.map((chart) => (
-        <div key={chart.label} style={{ ...gStyle.card, marginBottom: 20, pageBreakInside: "avoid" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <h3 style={{ fontFamily: font.display, color: C.dark, margin: 0, fontSize: 16 }}>{chart.label}</h3>
-            {chart.avg !== null && (
-              <span style={{ fontSize: 13, color: chart.color, fontWeight: 700 }}>
-                Avg: {
-                  chart.yLabel === "mins" ? fmtDuration(chart.avg) :
-                  chart.yLabel === "naps" ? chart.avg + " naps" :
-                  chart.yLabel === "wakings" ? chart.avg + " wakings" :
-                  chart.avg
-                }
-              </span>
-            )}
-          </div>
-          <LineChart data={chart.data} color={chart.color} label={chart.label} yLabel={chart.yLabel} />
-          <p style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
-            Dashed line = average · Hover dots to see exact values
-          </p>
-        </div>
-      ))}
-
-      {/* Daily breakdown table */}
-      <div style={{ ...gStyle.card, pageBreakInside: "avoid" }}>
-        <h3 style={{ fontFamily: font.display, color: C.dark, margin: "0 0 16px", fontSize: 16 }}>Daily Breakdown</h3>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ borderBottom: `2px solid ${C.border}` }}>
-                {["Date", "Wake Time", "Naps", "Nap Sleep", "Night Sleep", "Total 24h", "Avg Wake Window", "Night Wakings"].map(h => (
-                  <th key={h} style={{ padding: "8px 10px", textAlign: "left", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {days.map((d, i) => (
-                <tr key={d.date} style={{ borderBottom: `1px solid ${C.border}`, background: i % 2 === 0 ? C.white : C.cream }}>
-                  <td style={{ padding: "8px 10px", fontWeight: 600, color: C.dark }}>{d.label}</td>
-                  <td style={{ padding: "8px 10px", color: C.gold }}>{d.wakeTime || "—"}</td>
-                  <td style={{ padding: "8px 10px", color: C.mid }}>{d.napCount}</td>
-                  <td style={{ padding: "8px 10px", color: C.blue }}>{fmtDuration(d.napMins)}</td>
-                  <td style={{ padding: "8px 10px", color: C.terracotta }}>{fmtDuration(d.nightMins)}</td>
-                  <td style={{ padding: "8px 10px", color: C.gold, fontWeight: 600 }}>{fmtDuration(d.totalMins)}</td>
-                  <td style={{ padding: "8px 10px", color: C.mid }}>{d.avgWW ? fmtDuration(d.avgWW) : "—"}</td>
-                  <td style={{ padding: "8px 10px", color: C.terracottaDark }}>{d.nightWakings !== null ? d.nightWakings : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <style>{`
-        @media print {
-          .no-print { display: none !important; }
-          .print-only { display: block !important; }
-          body { background: white !important; }
-          button { display: none !important; }
-        }
-      `}</style>
-    </div>
-  );
-}
-
 // ── SLEEP CALCULATIONS ──────────────────────────────────────────────────────
-function calcNapMins(entry) {
-  const { naps = [] } = entry;
-  return naps.reduce((acc, n) => {
+function calcSleep(entry) {
+  const { wake_time, bed_time, naps = [] } = entry;
+
+  const totalNapMins = naps.reduce((acc, n) => {
     if (n.start && n.end) {
-      const dur = diffMins(parseTime(n.start), parseTime(n.end));
-      return acc + (dur > 0 && dur < 480 ? dur : 0);
+      return acc + diffMins(parseTime(n.start), parseTime(n.end));
     }
     return acc;
   }, 0);
-}
 
-// Night sleep = previous day bed_time until current day wake_time
-// This must be called with both entries available
-function calcNightSleep(prevBedTime, todayWakeTime) {
-  if (!prevBedTime || !todayWakeTime) return null;
-  const bedMins = parseTime(prevBedTime);
-  const wakeMins = parseTime(todayWakeTime);
-  if (bedMins === null || wakeMins === null) return null;
-  // Bed time is PM, wake time is AM next day — add 1440 if wake <= bed
-  let night = wakeMins - bedMins;
-  if (night <= 0) night += 1440;
-  // Sanity check: night sleep should be between 2h and 16h
-  if (night < 120 || night > 960) return null;
-  return night;
-}
+  let nightSleep = null;
+  if (bed_time && wake_time) {
+    nightSleep = diffMins(parseTime(bed_time), parseTime(wake_time));
+    if (nightSleep > 720) nightSleep = null; // sanity check
+  }
 
-function calcSleep(entry) {
-  const totalNapMins = calcNapMins(entry);
   return {
     total_nap_mins: totalNapMins,
-    night_sleep_mins: null, // calculated cross-day in doSave
-    total_sleep_24h: totalNapMins, // updated after night sleep is known
+    night_sleep_mins: nightSleep,
+    total_sleep_24h: totalNapMins + (nightSleep || 0),
   };
 }
