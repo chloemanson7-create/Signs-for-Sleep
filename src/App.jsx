@@ -12,34 +12,6 @@ const COACH_PASSWORD = "sleep2024"; // Change this via Settings inside the app
 const DEFAULT_SUPPORT_DAYS = 28;
 const DEFAULT_CONTACT_EVERY = 7;
 
-// Generate time options in 15-min increments for 24hr period
-const TIME_OPTIONS = Array.from({ length: 96 }, (_, i) => {
-  const totalMins = i * 15;
-  const h24 = Math.floor(totalMins / 60);
-  const m = totalMins % 60;
-  const val = `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
-  const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24;
-  const ampm = h24 < 12 ? "am" : "pm";
-  const label = `${h12}:${String(m).padStart(2,"0")}${ampm}`;
-  return { val, label };
-});
-
-function TimeSelect({ value, onChange, disabled, placeholder }) {
-  return (
-    <select
-      style={{ ...gStyle.input, cursor: disabled ? "default" : "pointer" }}
-      value={value || ""}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={disabled}
-    >
-      <option value="">{placeholder || "Select time…"}</option>
-      {TIME_OPTIONS.map(({ val, label }) => (
-        <option key={val} value={val}>{label}</option>
-      ))}
-    </select>
-  );
-}
-
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ── PALETTE & STYLES ───────────────────────────────────────────────────────
@@ -197,8 +169,8 @@ const fromMin = (mins) => {
 };
 const parseTime = (t) => {
   if (!t) return null;
-  const [h, m] = t.split(":").map(Number);
-  return h * 60 + (m || 0);
+  const parts = t.split(":").map(Number);
+  return parts[0] * 60 + (parts[1] || 0); // handles HH:MM and HH:MM:SS
 };
 const diffMins = (start, end) => {
   let d = end - start;
@@ -216,6 +188,48 @@ const fmtDuration = (mins) => {
 const today = () => new Date().toISOString().split("T")[0];
 const daysBetween = (a, b) =>
   Math.floor((new Date(b) - new Date(a)) / 86400000);
+
+// ── TIME SELECT COMPONENT ─────────────────────────────────────────────────
+// 1-minute increment options for full day (00:00 to 23:59)
+const TIME_OPTIONS = Array.from({ length: 1440 }, (_, i) => {
+  const h24 = Math.floor(i / 60);
+  const m = i % 60;
+  const val = `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+  const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24;
+  const ampm = h24 < 12 ? "am" : "pm";
+  const label = `${h12}:${String(m).padStart(2,"0")}${ampm}`;
+  return { val, label };
+});
+
+function TimeSelect({ value, onChange, disabled, placeholder }) {
+  return (
+    <select
+      style={{
+        width: "100%",
+        padding: "10px 14px",
+        border: `1px solid rgba(196,113,74,0.18)`,
+        borderRadius: 8,
+        fontFamily: "'DM Sans', system-ui, sans-serif",
+        fontSize: 14,
+        background: "#FFFFFF",
+        color: "#2C2420",
+        outline: "none",
+        boxSizing: "border-box",
+        cursor: disabled ? "default" : "pointer",
+        appearance: "auto",
+        WebkitAppearance: "auto",
+      }}
+      value={value || ""}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+    >
+      <option value="">{placeholder || "Select time…"}</option>
+      {TIME_OPTIONS.map(({ val, label }) => (
+        <option key={val} value={val}>{label}</option>
+      ))}
+    </select>
+  );
+}
 
 // ── INTAKE QUESTIONS ───────────────────────────────────────────────────────
 const PRONOUNS = ["She/her", "They/them", "He/him", "Prefer not to say"];
@@ -1196,19 +1210,28 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
       });
   }, [clientId]);
 
+  // Strip system fields before saving
+  const cleanResponses = (r) => {
+    const { id, client_id, created_at, completed, ...fields } = r;
+    return fields;
+  };
+
   // Auto-save to Supabase whenever responses change (debounced 800ms)
   useEffect(() => {
     if (!loaded || Object.keys(responses).length === 0) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       setSaving(true);
+      const fields = cleanResponses(responses);
       if (existingId) {
-        await supabase.from("intake_responses")
-          .update(responses).eq("client_id", clientId);
+        const { error } = await supabase.from("intake_responses")
+          .update(fields).eq("client_id", clientId);
+        if (error) console.error("Intake auto-save error:", error);
       } else {
-        const { data: inserted } = await supabase.from("intake_responses")
-          .insert({ ...responses, client_id: clientId })
+        const { data: inserted, error } = await supabase.from("intake_responses")
+          .insert({ ...fields, client_id: clientId, completed: false })
           .select("id").single();
+        if (error) console.error("Intake insert error:", error);
         if (inserted?.id) setExistingId(inserted.id);
       }
       setSaving(false);
@@ -1224,12 +1247,13 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const goToSection = async (next) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaving(true);
+    const fields = cleanResponses(responses);
     if (existingId) {
       await supabase.from("intake_responses")
-        .update(responses).eq("client_id", clientId);
+        .update(fields).eq("client_id", clientId);
     } else {
       const { data: inserted } = await supabase.from("intake_responses")
-        .insert({ ...responses, client_id: clientId })
+        .insert({ ...fields, client_id: clientId, completed: false })
         .select("id").single();
       if (inserted?.id) setExistingId(inserted.id);
     }
@@ -1242,14 +1266,14 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
     setSaving(true);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     const isFirstSubmit = !hasIntake;
+    const fields = cleanResponses(responses);
     if (existingId) {
       await supabase.from("intake_responses")
-        .update({ ...responses, completed: true }).eq("client_id", clientId);
+        .update({ ...fields, completed: true }).eq("client_id", clientId);
     } else {
       await supabase.from("intake_responses")
-        .insert({ ...responses, client_id: clientId, completed: true });
+        .insert({ ...fields, client_id: clientId, completed: true });
     }
-    // Send email notification only on first submission
     if (isFirstSubmit) {
       try {
         const { data: clientData } = await supabase
@@ -2115,11 +2139,11 @@ function calcNightSleep(prevBedTime, todayWakeTime) {
   const bedMins = parseTime(prevBedTime);
   const wakeMins = parseTime(todayWakeTime);
   if (bedMins === null || wakeMins === null) return null;
-  // Bed time is PM, wake time is AM next day — add 1440 if wake < bed
+  // Bed time is PM, wake time is AM next day — add 1440 if wake <= bed
   let night = wakeMins - bedMins;
-  if (night < 0) night += 1440;
-  // Sanity check: night sleep should be between 4h and 14h
-  if (night < 240 || night > 840) return null;
+  if (night <= 0) night += 1440;
+  // Sanity check: night sleep should be between 2h and 16h
+  if (night < 120 || night > 960) return null;
   return night;
 }
 
