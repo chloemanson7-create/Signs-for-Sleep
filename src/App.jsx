@@ -1489,15 +1489,10 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       total_sleep_24h: total24h,
     };
 
-    // Try update first, then insert if no row exists
-    const { data: existing } = await supabase
-      .from("sleep_diary").select("id").eq("client_id", clientId).eq("date", date).maybeSingle();
-    let error;
-    if (existing?.id) {
-      ({ error } = await supabase.from("sleep_diary").update(payload).eq("id", existing.id));
-    } else {
-      ({ error } = await supabase.from("sleep_diary").insert(payload));
-    }
+    // Upsert using unique constraint on client_id + date
+    const { error } = await supabase
+      .from("sleep_diary")
+      .upsert(payload, { onConflict: "client_id,date" });
     if (error) {
       console.error("Diary save error:", error);
       setSaving(false);
