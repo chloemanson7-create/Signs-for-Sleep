@@ -1483,16 +1483,22 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       return;
     }
 
-    // Update TOMORROW's night sleep now that today's bed_time is saved
-    // This handles the case where user goes back and edits a previous day's bedtime
+    // When bed_time changes, update TOMORROW's night sleep
+    // When wake_time changes, today's night sleep is already recalculated above
+    // This ensures editing any time on any day always propagates correctly
     const nextDate = new Date(date + "T00:00:00");
     nextDate.setDate(nextDate.getDate() + 1);
     const nextDateStr = nextDate.toISOString().split("T")[0];
     const { data: nextEntry } = await supabase
       .from("sleep_diary").select("id, wake_time, total_nap_mins")
       .eq("client_id", clientId).eq("date", nextDateStr).maybeSingle();
-    if (nextEntry?.id && rest.bed_time) {
-      const nextNightSleep = calcNightSleep(rest.bed_time, nextEntry.wake_time);
+    if (nextEntry?.id) {
+      // Use the bed_time we just saved (rest.bed_time) to calculate tomorrow's night
+      const bedTimeForNext = rest.bed_time || null;
+      const nextWakeTime = nextEntry.wake_time
+        ? nextEntry.wake_time.slice(0, 5) // normalise HH:MM:SS to HH:MM
+        : null;
+      const nextNightSleep = calcNightSleep(bedTimeForNext, nextWakeTime);
       const nextTotal = (nextEntry.total_nap_mins || 0) + (nextNightSleep || 0);
       await supabase.from("sleep_diary").update({
         night_sleep_mins: nextNightSleep,
@@ -2134,8 +2140,11 @@ function calcNapMins(entry) {
 // This must be called with both entries available
 function calcNightSleep(prevBedTime, todayWakeTime) {
   if (!prevBedTime || !todayWakeTime) return null;
-  const bedMins = parseTime(prevBedTime);
-  const wakeMins = parseTime(todayWakeTime);
+  // Normalise both times to HH:MM (strip seconds if present)
+  const normBed = String(prevBedTime).slice(0, 5);
+  const normWake = String(todayWakeTime).slice(0, 5);
+  const bedMins = parseTime(normBed);
+  const wakeMins = parseTime(normWake);
   if (bedMins === null || wakeMins === null) return null;
   // Bed time is PM, wake time is AM next day — add 1440 if wake <= bed
   let night = wakeMins - bedMins;
