@@ -190,9 +190,7 @@ const daysBetween = (a, b) =>
   Math.floor((new Date(b) - new Date(a)) / 86400000);
 
 // ── TIME SELECT COMPONENT ─────────────────────────────────────────────────
-// Single dropdown with 1-minute increments in 12hr format
-// Stores and reads in 24hr HH:MM format — no data format change
-
+// 1-minute increment options for full day (00:00 to 23:59)
 const TIME_OPTIONS = Array.from({ length: 1440 }, (_, i) => {
   const h24 = Math.floor(i / 60);
   const m = i % 60;
@@ -204,19 +202,19 @@ const TIME_OPTIONS = Array.from({ length: 1440 }, (_, i) => {
 });
 
 function TimeSelect({ value, onChange, disabled, placeholder }) {
-  // Normalise HH:MM:SS from Supabase to HH:MM for matching
+  // Supabase returns times as HH:MM:SS — strip seconds to match our HH:MM options
   const normalised = value ? value.slice(0, 5) : "";
   return (
     <select
       style={{
         width: "100%",
         padding: "10px 14px",
-        border: "1px solid rgba(196,113,74,0.18)",
+        border: `1px solid rgba(196,113,74,0.18)`,
         borderRadius: 8,
         fontFamily: "'DM Sans', system-ui, sans-serif",
         fontSize: 14,
         background: "#FFFFFF",
-        color: normalised ? "#2C2420" : "#9E8E88",
+        color: "#2C2420",
         outline: "none",
         boxSizing: "border-box",
         cursor: disabled ? "default" : "pointer",
@@ -1214,27 +1212,25 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const saveNow = async (data, markCompleted = false) => {
     // Strip system fields
     const { id, client_id, created_at, completed, ...fields } = data;
-
+    const payload = {
+      ...fields,
+      completed: markCompleted ? true : false,
+    };
     // Check if a row already exists for this client
     const { data: existing } = await supabase
       .from("intake_responses")
-      .select("id, completed")
+      .select("id")
       .eq("client_id", clientId)
       .maybeSingle();
-
-    // IMPORTANT: never downgrade completed from true to false
-    // If already completed, keep it completed regardless of markCompleted param
-    const completedValue = existing?.completed === true ? true : markCompleted;
-
-    const payload = { ...fields, completed: completedValue };
-
     let error;
     if (existing?.id) {
+      // Row exists — update it
       ({ error } = await supabase
         .from("intake_responses")
         .update(payload)
         .eq("id", existing.id));
     } else {
+      // No row yet — insert one
       ({ error } = await supabase
         .from("intake_responses")
         .insert({ ...payload, client_id: clientId }));
@@ -1709,19 +1705,19 @@ function SleepDiaryViewer({ clientId, isCoach }) {
               </div>
               <div style={{ marginBottom: 10 }}>
                 <label style={gStyle.label}>How did they fall asleep?</label>
-                <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={nap.how_fell_asleep || ""}
+                <input style={gStyle.input} value={nap.how_fell_asleep || ""}
                   placeholder="e.g. fed to sleep, rocked, independently, with dummy..."
                   onChange={(e) => updateNap(idx, "how_fell_asleep", e.target.value)} disabled={isCoach} />
               </div>
               <div style={{ marginBottom: 10 }}>
                 <label style={gStyle.label}>Where did they nap?</label>
-                <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={nap.location || ""}
+                <input style={gStyle.input} value={nap.location || ""}
                   placeholder="e.g. cot, pram, carrier, car, arms..."
                   onChange={(e) => updateNap(idx, "location", e.target.value)} disabled={isCoach} />
               </div>
               <div style={{ marginBottom: 10 }}>
                 <label style={gStyle.label}>Did they need to be resettled?</label>
-                <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={nap.resettled || ""}
+                <input style={gStyle.input} value={nap.resettled || ""}
                   placeholder="e.g. no, once after 30 min, multiple times..."
                   onChange={(e) => updateNap(idx, "resettled", e.target.value)} disabled={isCoach} />
               </div>
@@ -1792,7 +1788,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
             <label style={gStyle.label}>Night waking notes</label>
             <input style={gStyle.input} value={entry.night_wakings_notes || ""}
               placeholder="e.g. awake 2am for 45 min, resettled with feed..."
-              onChange={(e) => update("night_wakings_notes", e.target.value)} disabled={isCoach} style={{ ...gStyle.input, minHeight: 60 }} />
+              onChange={(e) => update("night_wakings_notes", e.target.value)} disabled={isCoach} />
           </div>
         </div>
         <label style={gStyle.label}>General notes</label>
