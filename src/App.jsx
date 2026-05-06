@@ -190,78 +190,48 @@ const daysBetween = (a, b) =>
   Math.floor((new Date(b) - new Date(a)) / 86400000);
 
 // ── TIME SELECT COMPONENT ─────────────────────────────────────────────────
-// 3-column picker: Hour (1-12), Minute (00-59), AM/PM
+// Single dropdown with 1-minute increments in 12hr format
 // Stores and reads in 24hr HH:MM format — no data format change
 
+const TIME_OPTIONS = Array.from({ length: 1440 }, (_, i) => {
+  const h24 = Math.floor(i / 60);
+  const m = i % 60;
+  const val = `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+  const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24;
+  const ampm = h24 < 12 ? "am" : "pm";
+  const label = `${h12}:${String(m).padStart(2,"0")}${ampm}`;
+  return { val, label };
+});
+
 function TimeSelect({ value, onChange, disabled, placeholder }) {
-  // Parse incoming HH:MM or HH:MM:SS (24hr) into 12hr parts
-  const parse24 = (t) => {
-    if (!t) return { h: "", m: "", ampm: "am" };
-    const [h24, m] = t.slice(0, 5).split(":").map(Number);
-    const ampm = h24 < 12 ? "am" : "pm";
-    const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24;
-    return { h: String(h12), m: String(m).padStart(2, "0"), ampm };
-  };
-
-  // Convert 12hr parts back to HH:MM 24hr
-  const to24 = (h, m, ampm) => {
-    if (!h || !m) return "";
-    let h24 = parseInt(h);
-    if (ampm === "am" && h24 === 12) h24 = 0;
-    if (ampm === "pm" && h24 !== 12) h24 += 12;
-    return `${String(h24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-  };
-
-  const { h, m, ampm } = parse24(value);
-
-  const handleChange = (field, val) => {
-    const next = {
-      h: field === "h" ? val : h,
-      m: field === "m" ? val : m,
-      ampm: field === "ampm" ? val : ampm,
-    };
-    const result = to24(next.h, next.m, next.ampm);
-    if (result) onChange(result);
-  };
-
-  const selectStyle = {
-    padding: "10px 4px",
-    border: `1px solid rgba(196,113,74,0.18)`,
-    borderRadius: 8,
-    fontFamily: "'DM Sans', system-ui, sans-serif",
-    fontSize: 14,
-    background: disabled ? "#FAF7F2" : "#FFFFFF",
-    color: "#2C2420",
-    outline: "none",
-    cursor: disabled ? "default" : "pointer",
-    appearance: "auto",
-    WebkitAppearance: "auto",
-    textAlign: "center",
-    flex: 1,
-  };
-
-  const HOURS = ["1","2","3","4","5","6","7","8","9","10","11","12"];
-  const MINS = Array.from({ length: 60 }, (_, i) => String(i).padStart(2,"0"));
-
+  // Normalise HH:MM:SS from Supabase to HH:MM for matching
+  const normalised = value ? value.slice(0, 5) : "";
   return (
-    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-      {/* Hour */}
-      <select style={selectStyle} value={h} onChange={(e) => handleChange("h", e.target.value)} disabled={disabled}>
-        <option value="">hr</option>
-        {HOURS.map(v => <option key={v} value={v}>{v}</option>)}
-      </select>
-      <span style={{ color: "#6B5E58", fontWeight: 700, fontSize: 16 }}>:</span>
-      {/* Minute */}
-      <select style={selectStyle} value={m} onChange={(e) => handleChange("m", e.target.value)} disabled={disabled}>
-        <option value="">min</option>
-        {MINS.map(v => <option key={v} value={v}>{v}</option>)}
-      </select>
-      {/* AM/PM */}
-      <select style={{ ...selectStyle, flex: "0 0 60px" }} value={ampm} onChange={(e) => handleChange("ampm", e.target.value)} disabled={disabled}>
-        <option value="am">AM</option>
-        <option value="pm">PM</option>
-      </select>
-    </div>
+    <select
+      style={{
+        width: "100%",
+        padding: "10px 14px",
+        border: "1px solid rgba(196,113,74,0.18)",
+        borderRadius: 8,
+        fontFamily: "'DM Sans', system-ui, sans-serif",
+        fontSize: 14,
+        background: "#FFFFFF",
+        color: normalised ? "#2C2420" : "#9E8E88",
+        outline: "none",
+        boxSizing: "border-box",
+        cursor: disabled ? "default" : "pointer",
+        appearance: "auto",
+        WebkitAppearance: "auto",
+      }}
+      value={normalised}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+    >
+      <option value="">{placeholder || "Select time…"}</option>
+      {TIME_OPTIONS.map(({ val, label }) => (
+        <option key={val} value={val}>{label}</option>
+      ))}
+    </select>
   );
 }
 
