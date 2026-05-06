@@ -200,49 +200,235 @@ const offsetDate = (dateStr, delta) => {
   return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
 };
 
-// ── TIME SELECT COMPONENT ─────────────────────────────────────────────────
-// Single dropdown with 1-minute increments in 12hr format
-// Stores and reads in 24hr HH:MM format — no data format change
+// ── TIME WHEEL PICKER ─────────────────────────────────────────────────────
+// Scroll-wheel style picker: Hour | Minute | AM/PM
+// Output: clean HH:MM 24hr string — identical format to previous dropdown
+// Input: HH:MM or HH:MM:SS (Supabase format) — both handled correctly
 
-const TIME_OPTIONS = Array.from({ length: 1440 }, (_, i) => {
-  const h24 = Math.floor(i / 60);
-  const m = i % 60;
-  const val = `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
-  const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24;
+const WHEEL_HOURS = ["12","1","2","3","4","5","6","7","8","9","10","11"];
+const WHEEL_MINS  = Array.from({ length: 60 }, (_, i) => String(i).padStart(2,"0"));
+const WHEEL_AMPM  = ["am","pm"];
+const ITEM_H = 40;  // px height of each item
+const VISIBLE = 5;  // items visible, centre = selected
+
+function parse24ToWheel(t) {
+  if (!t) return { h: null, m: null, ampm: null };
+  const parts = t.slice(0,5).split(":").map(Number);
+  const h24 = parts[0], m = parts[1];
   const ampm = h24 < 12 ? "am" : "pm";
-  const label = `${h12}:${String(m).padStart(2,"0")}${ampm}`;
-  return { val, label };
-});
+  const h12  = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24;
+  return { h: h12, m, ampm };
+}
+
+function wheelTo24(h, m, ampm) {
+  if (h === null || m === null || !ampm) return "";
+  let h24 = parseInt(h);
+  if (ampm === "am" && h24 === 12) h24 = 0;
+  if (ampm === "pm" && h24 !== 12) h24 += 12;
+  return `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
+function WheelColumn({ items, selected, onSelect }) {
+  const scrollRef = useRef(null);
+  const timerRef  = useRef(null);
+  const selStr = selected !== null ? String(selected) : null;
+  const idx = selStr !== null ? items.indexOf(selStr) : -1;
+
+  useEffect(() => {
+    if (scrollRef.current && idx >= 0) {
+      scrollRef.current.scrollTop = idx * ITEM_H;
+    }
+  }, [idx]);
+
+  const onScroll = () => {
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      if (!scrollRef.current) return;
+      const snapped = Math.round(scrollRef.current.scrollTop / ITEM_H);
+      const clamped = Math.max(0, Math.min(items.length - 1, snapped));
+      scrollRef.current.scrollTop = clamped * ITEM_H;
+      onSelect(items[clamped]);
+    }, 100);
+  };
+
+  return (
+    <div style={{ position: "relative", flex: 1, overflow: "hidden" }}>
+      {/* Selection band */}
+      <div style={{
+        position: "absolute", pointerEvents: "none", zIndex: 1,
+        top: ITEM_H * Math.floor(VISIBLE / 2), left: 0, right: 0, height: ITEM_H,
+        background: "rgba(196,113,74,0.1)",
+        borderTop: "1.5px solid rgba(196,113,74,0.4)",
+        borderBottom: "1.5px solid rgba(196,113,74,0.4)",
+        borderRadius: 6,
+      }} />
+      {/* Top fade */}
+      <div style={{
+        position: "absolute", pointerEvents: "none", zIndex: 2,
+        top: 0, left: 0, right: 0, height: ITEM_H * Math.floor(VISIBLE / 2),
+        background: "linear-gradient(to bottom, rgba(255,255,255,0.9) 60%, transparent)",
+      }} />
+      {/* Bottom fade */}
+      <div style={{
+        position: "absolute", pointerEvents: "none", zIndex: 2,
+        bottom: 0, left: 0, right: 0, height: ITEM_H * Math.floor(VISIBLE / 2),
+        background: "linear-gradient(to top, rgba(255,255,255,0.9) 60%, transparent)",
+      }} />
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        style={{
+          height: ITEM_H * VISIBLE,
+          overflowY: "scroll",
+          scrollSnapType: "y mandatory",
+          WebkitOverflowScrolling: "touch",
+          scrollbarWidth: "none",
+          msOverflowStyle: "none",
+        }}
+      >
+        <div style={{ height: ITEM_H * Math.floor(VISIBLE / 2) }} />
+        {items.map((item) => {
+          const active = selStr === item;
+          return (
+            <div
+              key={item}
+              onClick={() => {
+                onSelect(item);
+                const i = items.indexOf(item);
+                if (scrollRef.current) scrollRef.current.scrollTop = i * ITEM_H;
+              }}
+              style={{
+                height: ITEM_H, display: "flex",
+                alignItems: "center", justifyContent: "center",
+                fontSize: active ? 20 : 17,
+                fontFamily: "'DM Sans', system-ui, sans-serif",
+                fontWeight: active ? 700 : 400,
+                color: active ? "#C4714A" : "#9E8E88",
+                cursor: "pointer",
+                scrollSnapAlign: "center",
+                userSelect: "none",
+                transition: "font-size 0.1s, color 0.1s",
+              }}
+            >
+              {item.toUpperCase()}
+            </div>
+          );
+        })}
+        <div style={{ height: ITEM_H * Math.floor(VISIBLE / 2) }} />
+      </div>
+    </div>
+  );
+}
 
 function TimeSelect({ value, onChange, disabled, placeholder }) {
-  // Normalise HH:MM:SS from Supabase to HH:MM for matching
-  const normalised = value ? value.slice(0, 5) : "";
+  const init = parse24ToWheel(value);
+  const [h,    setH]    = useState(init.h);
+  const [m,    setM]    = useState(init.m);
+  const [ampm, setAmpm] = useState(init.ampm || "am");
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  // Sync when external value changes (loading saved data)
+  useEffect(() => {
+    const p = parse24ToWheel(value);
+    if (p.h !== null) { setH(p.h); setM(p.m); setAmpm(p.ampm); }
+  }, [value]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const fn = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", fn);
+    return () => document.removeEventListener("mousedown", fn);
+  }, [open]);
+
+  const handle = (field, val) => {
+    const next = {
+      h:    field === "h"    ? val  : h,
+      m:    field === "m"    ? val  : m,
+      ampm: field === "ampm" ? val  : ampm,
+    };
+    if (field === "h")    setH(val);
+    if (field === "m")    setM(val);
+    if (field === "ampm") setAmpm(val);
+    // Only fire onChange when all three are valid
+    if (next.h !== null && next.m !== null && next.ampm) {
+      const result = wheelTo24(next.h, next.m, next.ampm);
+      if (result) onChange(result);
+    }
+  };
+
+  const label = h !== null && m !== null
+    ? `${h}:${String(m).padStart(2,"0")} ${ampm.toUpperCase()}`
+    : placeholder || "Select time…";
+
   return (
-    <select
-      style={{
-        width: "100%",
-        padding: "10px 14px",
-        border: "1px solid rgba(196,113,74,0.18)",
-        borderRadius: 8,
-        fontFamily: "'DM Sans', system-ui, sans-serif",
-        fontSize: 14,
-        background: "#FFFFFF",
-        color: normalised ? "#2C2420" : "#9E8E88",
-        outline: "none",
-        boxSizing: "border-box",
-        cursor: disabled ? "default" : "pointer",
-        appearance: "auto",
-        WebkitAppearance: "auto",
-      }}
-      value={normalised}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={disabled}
-    >
-      <option value="">{placeholder || "Select time…"}</option>
-      {TIME_OPTIONS.map(({ val, label }) => (
-        <option key={val} value={val}>{label}</option>
-      ))}
-    </select>
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => !disabled && setOpen(o => !o)}
+        style={{
+          width: "100%", padding: "10px 14px",
+          border: "1px solid rgba(196,113,74,0.18)",
+          borderRadius: 8,
+          fontFamily: "'DM Sans', system-ui, sans-serif",
+          fontSize: 14,
+          background: disabled ? "#FAF7F2" : "#FFFFFF",
+          color: h !== null ? "#2C2420" : "#9E8E88",
+          outline: "none", cursor: disabled ? "default" : "pointer",
+          textAlign: "left", display: "flex",
+          alignItems: "center", justifyContent: "space-between",
+          boxSizing: "border-box",
+        }}
+      >
+        <span>{label}</span>
+        {!disabled && <span style={{ color: "#C9A84C", fontSize: 11 }}>{open ? "▲" : "▼"}</span>}
+      </button>
+
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 9999,
+          background: "#FFFFFF",
+          border: "1px solid rgba(196,113,74,0.25)",
+          borderRadius: 14,
+          boxShadow: "0 12px 40px rgba(44,36,32,0.18)",
+          padding: "8px 8px 10px",
+          width: "100%", minWidth: 220,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <WheelColumn
+              items={WHEEL_HOURS}
+              selected={h !== null ? String(h) : null}
+              onSelect={(v) => handle("h", parseInt(v))}
+            />
+            <div style={{ color: "#9E8E88", fontSize: 20, fontWeight: 700, paddingBottom: 2 }}>:</div>
+            <WheelColumn
+              items={WHEEL_MINS}
+              selected={m !== null ? String(m).padStart(2,"0") : null}
+              onSelect={(v) => handle("m", parseInt(v))}
+            />
+            <WheelColumn
+              items={WHEEL_AMPM}
+              selected={ampm}
+              onSelect={(v) => handle("ampm", v)}
+            />
+          </div>
+          <button
+            onClick={() => setOpen(false)}
+            style={{
+              marginTop: 8, width: "100%", padding: "9px",
+              border: "none", borderRadius: 8,
+              background: "#C4714A", color: "#FFFFFF",
+              fontSize: 13, fontFamily: "'DM Sans', system-ui, sans-serif",
+              fontWeight: 600, cursor: "pointer",
+            }}
+          >
+            Done
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
