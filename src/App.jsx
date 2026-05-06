@@ -1439,7 +1439,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     if (!data) return;
     setSaving(true);
 
-    // Calculate nap total
+    // Calculate nap total from current entry
     const totalNapMins = calcNapMins(data);
 
     // Look up previous day's bed_time to calculate night sleep
@@ -1449,28 +1449,12 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     const { data: prevEntry } = await supabase
       .from("sleep_diary").select("bed_time")
       .eq("client_id", clientId).eq("date", prevDateStr).maybeSingle();
+
+    // Calculate night sleep: prev bed_time -> today wake_time
     const nightSleep = calcNightSleep(prevEntry?.bed_time, data.wake_time);
     const total24h = totalNapMins + (nightSleep || 0);
 
-    // Also update TOMORROW's night sleep if today's bed_time changed
-    const nextDate = new Date(date + "T00:00:00");
-    nextDate.setDate(nextDate.getDate() + 1);
-    const nextDateStr = nextDate.toISOString().split("T")[0];
-    const { data: nextEntry } = await supabase
-      .from("sleep_diary").select("id, wake_time, total_nap_mins")
-      .eq("client_id", clientId).eq("date", nextDateStr).maybeSingle();
-    if (nextEntry?.id && data.bed_time) {
-      const nextNightSleep = calcNightSleep(data.bed_time, nextEntry.wake_time);
-      if (nextNightSleep !== null) {
-        const nextTotal = (nextEntry.total_nap_mins || 0) + nextNightSleep;
-        await supabase.from("sleep_diary").update({
-          night_sleep_mins: nextNightSleep,
-          total_sleep_24h: nextTotal,
-        }).eq("id", nextEntry.id);
-      }
-    }
-
-    // Strip any fields not in the database schema
+    // Build payload — only include columns that exist in the database
     const { id, created_at, ...rest } = data;
     const payload = {
       client_id: clientId,
@@ -1498,6 +1482,31 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       setSaving(false);
       return;
     }
+
+    // Update TOMORROW's night sleep now that today's bed_time is saved
+    // This handles the case where user goes back and edits a previous day's bedtime
+    const nextDate = new Date(date + "T00:00:00");
+    nextDate.setDate(nextDate.getDate() + 1);
+    const nextDateStr = nextDate.toISOString().split("T")[0];
+    const { data: nextEntry } = await supabase
+      .from("sleep_diary").select("id, wake_time, total_nap_mins")
+      .eq("client_id", clientId).eq("date", nextDateStr).maybeSingle();
+    if (nextEntry?.id && rest.bed_time) {
+      const nextNightSleep = calcNightSleep(rest.bed_time, nextEntry.wake_time);
+      const nextTotal = (nextEntry.total_nap_mins || 0) + (nextNightSleep || 0);
+      await supabase.from("sleep_diary").update({
+        night_sleep_mins: nextNightSleep,
+        total_sleep_24h: nextTotal,
+      }).eq("id", nextEntry.id);
+    }
+    // Update local state with calculated values so display refreshes immediately
+    setEntry(prev => prev ? {
+      ...prev,
+      total_nap_mins: totalNapMins,
+      night_sleep_mins: nightSleep,
+      total_sleep_24h: total24h,
+    } : prev);
+
     setSaving(false);
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 2000);
