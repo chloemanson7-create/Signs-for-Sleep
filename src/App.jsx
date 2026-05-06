@@ -349,7 +349,7 @@ export default function App() {
             .from("clients")
             .select("session_token, name")
             .eq("id", parsed.clientId)
-            .single()
+            .maybeSingle()
             .then(({ data }) => {
               if (data && data.session_token === parsed.token) {
                 setSession(parsed);
@@ -457,7 +457,7 @@ function LoginScreen({ onLogin }) {
       .from("settings")
       .select("value")
       .eq("key", "coach_password")
-      .single();
+      .maybeSingle();
     const storedPw = settings?.value || COACH_PASSWORD;
 
     if (upper === storedPw.toUpperCase()) {
@@ -471,7 +471,7 @@ function LoginScreen({ onLogin }) {
       .select("id, name")
       .eq("access_code", upper)
       .eq("status", "active")
-      .single();
+      .maybeSingle();
 
     if (client) {
       onLogin({ role: "client", clientId: client.id, clientName: client.name });
@@ -797,7 +797,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
   const [clientData, setClientData] = useState(client);
 
   const refresh = async () => {
-    const { data } = await supabase.from("clients").select("*").eq("id", client.id).single();
+    const { data } = await supabase.from("clients").select("*").eq("id", client.id).maybeSingle();
     if (data) setClientData(data);
     onRefresh();
   };
@@ -927,7 +927,7 @@ function IntakeViewer({ clientId }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.from("intake_responses").select("*").eq("client_id", clientId).single()
+    supabase.from("intake_responses").select("*").eq("client_id", clientId).maybeSingle()
       .then(({ data }) => { setIntake(data); setLoading(false); });
   }, [clientId]);
 
@@ -962,7 +962,7 @@ function CoachNotes({ clientId }) {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    supabase.from("coach_notes").select("notes").eq("client_id", clientId).single()
+    supabase.from("coach_notes").select("notes").eq("client_id", clientId).maybeSingle()
       .then(({ data }) => {
         setNotes(data?.notes || "");
         setLoaded(true);
@@ -1091,7 +1091,7 @@ function CoachSettings({ onBack }) {
 
   const changePw = async () => {
     setError("");
-    const { data } = await supabase.from("settings").select("value").eq("key", "coach_password").single();
+    const { data } = await supabase.from("settings").select("value").eq("key", "coach_password").maybeSingle();
     const stored = data?.value || COACH_PASSWORD;
     if (currentPw !== stored) { setError("Current password incorrect."); return; }
     if (newPw !== confirmPw) { setError("New passwords don't match."); return; }
@@ -1135,7 +1135,7 @@ function ClientApp({ session, onLogout }) {
 
   useEffect(() => {
     supabase.from("intake_responses").select("id, completed")
-      .eq("client_id", session.clientId).single()
+      .eq("client_id", session.clientId).maybeSingle()
       .then(({ data }) => {
         const done = !!(data?.completed);
         setHasIntake(done);
@@ -1201,7 +1201,7 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   // Load existing responses on mount
   useEffect(() => {
     supabase.from("intake_responses").select("*")
-      .eq("client_id", clientId).single()
+      .eq("client_id", clientId).maybeSingle()
       .then(({ data }) => {
         if (data) setResponses(data);
         setLoaded(true);
@@ -1272,7 +1272,7 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
     // Send email notification
     try {
       const { data: clientData } = await supabase
-        .from("clients").select("name").eq("id", clientId).single();
+        .from("clients").select("name").eq("id", clientId).maybeSingle();
       await supabase.functions.invoke("notify-intake", {
         body: { clientName: clientData?.name || "A client", clientId },
       });
