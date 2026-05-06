@@ -185,12 +185,25 @@ const fmtDuration = (mins) => {
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
 };
-const today = () => new Date().toISOString().split("T")[0];
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+};
 const daysBetween = (a, b) =>
   Math.floor((new Date(b) - new Date(a)) / 86400000);
 
+// Safe date offset using string arithmetic — avoids UTC timezone shift issues
+// e.g. offsetDate("2026-05-06", -1) => "2026-05-05"
+const offsetDate = (dateStr, delta) => {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + delta); // local time, no UTC conversion
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
+};
+
 // ── TIME SELECT COMPONENT ─────────────────────────────────────────────────
-// 1-minute increment options for full day (00:00 to 23:59)
+// Single dropdown with 1-minute increments in 12hr format
+// Stores and reads in 24hr HH:MM format — no data format change
+
 const TIME_OPTIONS = Array.from({ length: 1440 }, (_, i) => {
   const h24 = Math.floor(i / 60);
   const m = i % 60;
@@ -202,19 +215,19 @@ const TIME_OPTIONS = Array.from({ length: 1440 }, (_, i) => {
 });
 
 function TimeSelect({ value, onChange, disabled, placeholder }) {
-  // Supabase returns times as HH:MM:SS — strip seconds to match our HH:MM options
+  // Normalise HH:MM:SS from Supabase to HH:MM for matching
   const normalised = value ? value.slice(0, 5) : "";
   return (
     <select
       style={{
         width: "100%",
         padding: "10px 14px",
-        border: `1px solid rgba(196,113,74,0.18)`,
+        border: "1px solid rgba(196,113,74,0.18)",
         borderRadius: 8,
         fontFamily: "'DM Sans', system-ui, sans-serif",
         fontSize: 14,
         background: "#FFFFFF",
-        color: "#2C2420",
+        color: normalised ? "#2C2420" : "#9E8E88",
         outline: "none",
         boxSizing: "border-box",
         cursor: disabled ? "default" : "pointer",
@@ -1212,25 +1225,27 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const saveNow = async (data, markCompleted = false) => {
     // Strip system fields
     const { id, client_id, created_at, completed, ...fields } = data;
-    const payload = {
-      ...fields,
-      completed: markCompleted ? true : false,
-    };
+
     // Check if a row already exists for this client
     const { data: existing } = await supabase
       .from("intake_responses")
-      .select("id")
+      .select("id, completed")
       .eq("client_id", clientId)
       .maybeSingle();
+
+    // IMPORTANT: never downgrade completed from true to false
+    // If already completed, keep it completed regardless of markCompleted param
+    const completedValue = existing?.completed === true ? true : markCompleted;
+
+    const payload = { ...fields, completed: completedValue };
+
     let error;
     if (existing?.id) {
-      // Row exists — update it
       ({ error } = await supabase
         .from("intake_responses")
         .update(payload)
         .eq("id", existing.id));
     } else {
-      // No row yet — insert one
       ({ error } = await supabase
         .from("intake_responses")
         .insert({ ...payload, client_id: clientId }));
@@ -1443,9 +1458,8 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     const totalNapMins = calcNapMins(data);
 
     // Look up previous day's bed_time to calculate night sleep
-    const prevDate = new Date(date + "T00:00:00");
-    prevDate.setDate(prevDate.getDate() - 1);
-    const prevDateStr = prevDate.toISOString().split("T")[0];
+    // Use pure string arithmetic to avoid timezone issues with toISOString()
+    const prevDateStr = offsetDate(date, -1);
     const { data: prevEntry } = await supabase
       .from("sleep_diary").select("bed_time")
       .eq("client_id", clientId).eq("date", prevDateStr).maybeSingle();
@@ -1484,11 +1498,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     }
 
     // When bed_time changes, update TOMORROW's night sleep
-    // When wake_time changes, today's night sleep is already recalculated above
-    // This ensures editing any time on any day always propagates correctly
-    const nextDate = new Date(date + "T00:00:00");
-    nextDate.setDate(nextDate.getDate() + 1);
-    const nextDateStr = nextDate.toISOString().split("T")[0];
+    const nextDateStr = offsetDate(date, +1);
     const { data: nextEntry } = await supabase
       .from("sleep_diary").select("id, wake_time, total_nap_mins")
       .eq("client_id", clientId).eq("date", nextDateStr).maybeSingle();
@@ -1548,9 +1558,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
   };
 
   const changeDate = (delta) => {
-    const d = new Date(selectedDate);
-    d.setDate(d.getDate() + delta);
-    setSelectedDate(d.toISOString().split("T")[0]);
+    setSelectedDate(offsetDate(selectedDate, delta));
   };
 
   const handleDateChange = (newDate) => setSelectedDate(newDate);
@@ -1705,19 +1713,19 @@ function SleepDiaryViewer({ clientId, isCoach }) {
               </div>
               <div style={{ marginBottom: 10 }}>
                 <label style={gStyle.label}>How did they fall asleep?</label>
-                <input style={gStyle.input} value={nap.how_fell_asleep || ""}
+                <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={nap.how_fell_asleep || ""}
                   placeholder="e.g. fed to sleep, rocked, independently, with dummy..."
                   onChange={(e) => updateNap(idx, "how_fell_asleep", e.target.value)} disabled={isCoach} />
               </div>
               <div style={{ marginBottom: 10 }}>
                 <label style={gStyle.label}>Where did they nap?</label>
-                <input style={gStyle.input} value={nap.location || ""}
+                <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={nap.location || ""}
                   placeholder="e.g. cot, pram, carrier, car, arms..."
                   onChange={(e) => updateNap(idx, "location", e.target.value)} disabled={isCoach} />
               </div>
               <div style={{ marginBottom: 10 }}>
                 <label style={gStyle.label}>Did they need to be resettled?</label>
-                <input style={gStyle.input} value={nap.resettled || ""}
+                <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={nap.resettled || ""}
                   placeholder="e.g. no, once after 30 min, multiple times..."
                   onChange={(e) => updateNap(idx, "resettled", e.target.value)} disabled={isCoach} />
               </div>
@@ -1788,7 +1796,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
             <label style={gStyle.label}>Night waking notes</label>
             <input style={gStyle.input} value={entry.night_wakings_notes || ""}
               placeholder="e.g. awake 2am for 45 min, resettled with feed..."
-              onChange={(e) => update("night_wakings_notes", e.target.value)} disabled={isCoach} />
+              onChange={(e) => update("night_wakings_notes", e.target.value)} disabled={isCoach} style={{ ...gStyle.input, minHeight: 60 }} />
           </div>
         </div>
         <label style={gStyle.label}>General notes</label>
