@@ -1006,6 +1006,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
     { key: "intake", label: "Intake" },
     { key: "diary", label: "Sleep Diary" },
     { key: "analysis", label: "📊 Analysis" },
+    { key: "plan", label: "📋 Sleep Plan" },
     { key: "notes", label: "Notes" },
     { key: "settings", label: "Settings" },
   ];
@@ -1037,6 +1038,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
       {tab === "intake" && <IntakeViewer clientId={client.id} />}
       {tab === "diary" && <SleepDiaryViewer clientId={client.id} isCoach />}
       {tab === "analysis" && <SleepAnalysis client={clientData} />}
+      {tab === "plan" && <SleepPlanEditor clientId={client.id} clientData={clientData} isCoach={true} />}
       {tab === "notes" && <CoachNotes clientId={client.id} />}
       {tab === "settings" && <ClientSettings client={clientData} onRefresh={refresh} onDelete={onBack} />}
     </>
@@ -1345,6 +1347,7 @@ function ClientApp({ session, onLogout }) {
   const tabs = [
     { key: "diary", label: "Sleep Diary" },
     { key: "intake", label: "Questionnaire" },
+    { key: "plan", label: "📋 Sleep Plan" },
   ];
 
   return (
@@ -1376,6 +1379,7 @@ function ClientApp({ session, onLogout }) {
 
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
         {tab === "diary" && <SleepDiaryViewer clientId={session.clientId} isCoach={false} />}
+        {tab === "plan" && <SleepPlanEditor clientId={session.clientId} isCoach={false} />}
         {tab === "intake" && (
           <IntakeForm
             clientId={session.clientId}
@@ -2312,6 +2316,409 @@ function SleepAnalysis({ client }) {
           .print-only { display: block !important; }
           body { background: white !important; }
           button { display: none !important; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ── SLEEP PLAN ───────────────────────────────────────────────────────────────
+
+const DEFAULT_SECTIONS = [
+  { key: "consult_summary",   title: "Consult Summary" },
+  { key: "goals",             title: "Goals" },
+  { key: "sleep_reasons",     title: "Possible Reasons for Your Current Sleep Situation" },
+  { key: "focus",             title: "What We Will Focus On" },
+  { key: "methods",           title: "Sleep Methods & Strategies" },
+  { key: "nap_schedule",      title: "Nap Schedule" },
+  { key: "bedtime_routine",   title: "Bedtime Routine" },
+  { key: "night_waking",      title: "Night Waking Plan" },
+  { key: "additional_notes",  title: "Additional Notes" },
+];
+
+function SleepPlanEditor({ clientId, clientData, isCoach }) {
+  const [plan, setPlan]         = useState(null);
+  const [sections, setSections] = useState([]);
+  const [saving, setSaving]     = useState(false);
+  const [savedMsg, setSavedMsg] = useState(false);
+  const [loading, setLoading]   = useState(true);
+  const [versions, setVersions] = useState([]);
+  const [showVersions, setShowVersions] = useState(false);
+  const [viewingVersion, setViewingVersion] = useState(null);
+  const [childName, setChildName] = useState("");
+  const saveTimer = useRef(null);
+
+  // Load child name from intake
+  useEffect(() => {
+    supabase.from("intake_responses").select("child_name")
+      .eq("client_id", clientId).maybeSingle()
+      .then(({ data }) => { if (data?.child_name) setChildName(data.child_name); });
+  }, [clientId]);
+
+  // Load plan and sections
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      const { data: planData } = await supabase
+        .from("sleep_plans").select("*")
+        .eq("client_id", clientId).maybeSingle();
+
+      if (planData) {
+        setPlan(planData);
+        const { data: secData } = await supabase
+          .from("sleep_plan_sections").select("*")
+          .eq("plan_id", planData.id)
+          .order("sort_order", { ascending: true });
+        setSections(secData || []);
+        // Load versions
+        const { data: verData } = await supabase
+          .from("sleep_plan_versions").select("*")
+          .eq("plan_id", planData.id)
+          .order("created_at", { ascending: false });
+        setVersions(verData || []);
+      } else if (isCoach) {
+        // Initialise with default sections for coach
+        setSections(DEFAULT_SECTIONS.map((s, i) => ({
+          id: null, plan_id: null,
+          section_key: s.key, title: s.title,
+          content: "", sort_order: i,
+        })));
+      }
+      setLoading(false);
+    };
+    load();
+  }, [clientId, isCoach]);
+
+  // Save plan to Supabase
+  const savePlan = async (secs, opts = {}) => {
+    setSaving(true);
+    let planId = plan?.id;
+
+    // Create plan row if it doesn't exist
+    if (!planId) {
+      const { data: newPlan } = await supabase
+        .from("sleep_plans")
+        .insert({ client_id: clientId, shared: false })
+        .select("*").maybeSingle();
+      if (newPlan) { setPlan(newPlan); planId = newPlan.id; }
+    }
+    if (!planId) { setSaving(false); return; }
+
+    // Upsert all sections
+    const toSave = secs.map((s, i) => ({
+      plan_id: planId,
+      section_key: s.section_key || null,
+      title: s.title,
+      content: s.content || "",
+      sort_order: i,
+    }));
+
+    // Delete existing sections and reinsert (simplest way to handle reorder/delete)
+    await supabase.from("sleep_plan_sections").delete().eq("plan_id", planId);
+    const { data: savedSecs } = await supabase
+      .from("sleep_plan_sections").insert(toSave).select("*");
+    if (savedSecs) setSections(savedSecs.sort((a,b) => a.sort_order - b.sort_order));
+
+    // If sharing for first time or updating shared plan, save version snapshot
+    if (opts.share || (plan?.shared && !opts.unshare)) {
+      await supabase.from("sleep_plan_versions").insert({
+        plan_id: planId,
+        snapshot: toSave,
+      });
+      // Reload versions
+      const { data: verData } = await supabase
+        .from("sleep_plan_versions").select("*")
+        .eq("plan_id", planId)
+        .order("created_at", { ascending: false });
+      setVersions(verData || []);
+    }
+
+    // Update shared status if needed
+    if (opts.share !== undefined) {
+      const update = { shared: opts.share };
+      if (opts.share) update.shared_at = new Date().toISOString();
+      await supabase.from("sleep_plans").update(update).eq("id", planId);
+      setPlan(prev => ({ ...prev, ...update, shared: opts.share }));
+    }
+
+    setSaving(false);
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 2000);
+  };
+
+  // Debounced auto-save
+  const handleSectionChange = (idx, field, value) => {
+    const updated = sections.map((s, i) => i === idx ? { ...s, [field]: value } : s);
+    setSections(updated);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => savePlan(updated), 1500);
+  };
+
+  const addCustomSection = () => {
+    const updated = [...sections, {
+      id: null, plan_id: plan?.id || null,
+      section_key: null, title: "Custom Section",
+      content: "", sort_order: sections.length,
+    }];
+    setSections(updated);
+  };
+
+  const removeSection = (idx) => {
+    const updated = sections.filter((_, i) => i !== idx);
+    setSections(updated);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => savePlan(updated), 1500);
+  };
+
+  const sharePlan = async () => {
+    await savePlan(sections, { share: true });
+    // Notify client via in-app flag on plan
+    alert("Sleep plan shared with client! They will see a notification next time they log in.");
+  };
+
+  const unshare = async () => {
+    await supabase.from("sleep_plans").update({ shared: false }).eq("id", plan.id);
+    setPlan(prev => ({ ...prev, shared: false }));
+  };
+
+  const printPlan = () => window.print();
+
+  if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading sleep plan…</p>;
+
+  // Client view — only show if plan exists and is shared
+  if (!isCoach) {
+    if (!plan || !plan.shared) return (
+      <div style={{ ...gStyle.card, textAlign: "center", padding: 48, color: C.muted }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>📋</div>
+        <p style={{ fontSize: 16, marginBottom: 8 }}>Your sleep plan isn't ready yet.</p>
+        <p style={{ fontSize: 13 }}>Your consultant will share it with you after your consult.</p>
+      </div>
+    );
+
+    const filledSections = (viewingVersion
+      ? viewingVersion.snapshot
+      : sections
+    ).filter(s => s.content && s.content.trim());
+
+    return (
+      <div>
+        {/* Print header */}
+        <div className="print-only" style={{ display: "none", marginBottom: 24, textAlign: "center" }}>
+          <img src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
+            alt="Signs for Sleep" style={{ maxWidth: 280, height: "auto" }} />
+          <div style={{ fontFamily: font.display, fontSize: 11, color: C.gold,
+            letterSpacing: "0.15em", textTransform: "uppercase", marginTop: 4 }}>
+            Gentle Sleep Consultant
+          </div>
+          <div style={{ fontFamily: font.display, fontSize: 20, color: C.terracotta, marginTop: 12 }}>
+            Sleep Plan{childName ? ` for ${childName}` : ""}
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+            {plan.shared_at ? `Shared ${new Date(plan.shared_at).toLocaleDateString("en-AU", { day:"numeric", month:"long", year:"numeric" })}` : ""}
+          </div>
+          <hr style={{ borderColor: C.border, margin: "16px 0" }} />
+        </div>
+
+        <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+          <div>
+            <h2 style={{ fontFamily: font.display, fontSize: 22, color: C.terracotta, margin: 0 }}>
+              {childName ? `Sleep Plan for ${childName}` : "Your Sleep Plan"}
+            </h2>
+            {plan.shared_at && (
+              <p style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
+                Shared {new Date(plan.shared_at).toLocaleDateString("en-AU", { day:"numeric", month:"long", year:"numeric" })}
+              </p>
+            )}
+          </div>
+          <button style={gStyle.btnGold} onClick={printPlan}>🖨 Print / Save PDF</button>
+        </div>
+
+        {filledSections.length === 0 ? (
+          <div style={{ ...gStyle.card, color: C.muted, textAlign: "center", padding: 40 }}>
+            No content has been added to your sleep plan yet.
+          </div>
+        ) : (
+          filledSections.map((s, i) => (
+            <div key={i} style={{ ...gStyle.card, pageBreakInside: "avoid" }}>
+              <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 12px", fontSize: 18 }}>
+                {s.title}
+              </h3>
+              <div style={{ fontSize: 14, color: C.dark, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
+                {s.content}
+              </div>
+            </div>
+          ))
+        )}
+        <style>{`
+          @media print {
+            .no-print { display: none !important; }
+            .print-only { display: block !important; }
+            body { background: white !important; }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  // Coach view — full editor
+  const filledCount = sections.filter(s => s.content && s.content.trim()).length;
+
+  return (
+    <div>
+      {/* Coach toolbar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ fontFamily: font.display, fontSize: 22, color: C.terracotta, margin: 0 }}>
+            {childName ? `Sleep Plan for ${childName}` : "Sleep Plan"}
+          </h2>
+          <p style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
+            {filledCount} of {sections.length} sections filled · {saving ? "Saving…" : savedMsg ? "✓ Saved" : "Auto-saves as you type"}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {versions.length > 0 && (
+            <button style={gStyle.btnSecondary} onClick={() => setShowVersions(!showVersions)}>
+              🕐 History ({versions.length})
+            </button>
+          )}
+          <button style={gStyle.btnGold} onClick={printPlan}>🖨 Print / PDF</button>
+          {plan?.shared ? (
+            <button style={gStyle.btnDanger} onClick={unshare}>Unshare from client</button>
+          ) : (
+            <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={sharePlan}>
+              Share with client
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Shared status banner */}
+      {plan?.shared && (
+        <div style={{ background: C.successLight, borderRadius: 10, padding: "10px 16px",
+          marginBottom: 20, fontSize: 13, color: C.success, display: "flex", justifyContent: "space-between" }}>
+          <span>✓ This plan is visible to the client</span>
+          <span style={{ color: C.muted }}>
+            Shared {plan.shared_at ? new Date(plan.shared_at).toLocaleDateString("en-AU") : ""}
+          </span>
+        </div>
+      )}
+
+      {/* Version history */}
+      {showVersions && versions.length > 0 && (
+        <div style={{ ...gStyle.card, marginBottom: 20, background: C.cream }}>
+          <h4 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 12px" }}>Version History</h4>
+          {versions.map((v, i) => (
+            <div key={v.id} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "8px 0", borderBottom: i < versions.length - 1 ? `1px solid ${C.border}` : "none"
+            }}>
+              <span style={{ fontSize: 13, color: C.dark }}>
+                Version {versions.length - i} — {new Date(v.created_at).toLocaleDateString("en-AU", {
+                  day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
+                })}
+              </span>
+              <button
+                style={{ ...gStyle.btnSecondary, padding: "4px 12px", fontSize: 12 }}
+                onClick={() => setViewingVersion(viewingVersion?.id === v.id ? null : v)}
+              >
+                {viewingVersion?.id === v.id ? "Close" : "View"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Viewing old version */}
+      {viewingVersion && (
+        <div style={{ ...gStyle.card, borderColor: C.gold, marginBottom: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <h4 style={{ fontFamily: font.display, color: C.gold, margin: 0 }}>
+              Viewing version from {new Date(viewingVersion.created_at).toLocaleDateString("en-AU")}
+            </h4>
+            <button style={gStyle.btnSecondary} onClick={() => setViewingVersion(null)}>Back to current</button>
+          </div>
+          {viewingVersion.snapshot.filter(s => s.content?.trim()).map((s, i) => (
+            <div key={i} style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, color: C.muted, fontWeight: 700, marginBottom: 4 }}>{s.title}</div>
+              <div style={{ fontSize: 13, color: C.dark, whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{s.content}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Print header */}
+      <div className="print-only" style={{ display: "none", marginBottom: 24, textAlign: "center" }}>
+        <img src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
+          alt="Signs for Sleep" style={{ maxWidth: 280, height: "auto" }} />
+        <div style={{ fontFamily: font.display, fontSize: 11, color: C.gold,
+          letterSpacing: "0.15em", textTransform: "uppercase", marginTop: 4 }}>
+          Gentle Sleep Consultant
+        </div>
+        <div style={{ fontFamily: font.display, fontSize: 20, color: C.terracotta, marginTop: 12 }}>
+          Sleep Plan{childName ? ` for ${childName}` : ""}
+        </div>
+        <hr style={{ borderColor: C.border, margin: "16px 0" }} />
+      </div>
+
+      {/* Sections */}
+      {sections.map((s, idx) => (
+        <div key={idx} style={{ ...gStyle.card, marginBottom: 16 }} className="no-print">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            {s.section_key ? (
+              <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: 0, fontSize: 16 }}>
+                {s.title}
+              </h3>
+            ) : (
+              <input
+                style={{ ...gStyle.input, fontFamily: font.display, fontSize: 16,
+                  color: C.terracotta, border: "none", padding: 0, fontWeight: 700, flex: 1 }}
+                value={s.title}
+                onChange={(e) => handleSectionChange(idx, "title", e.target.value)}
+                placeholder="Section title…"
+              />
+            )}
+            {!s.section_key && (
+              <button onClick={() => removeSection(idx)}
+                style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 18, marginLeft: 8 }}>
+                ×
+              </button>
+            )}
+          </div>
+          <textarea
+            style={{ ...gStyle.input, minHeight: 120, resize: "vertical", lineHeight: 1.7 }}
+            placeholder={s.section_key ? `Add ${s.title.toLowerCase()} here…` : "Add content here…"}
+            value={s.content || ""}
+            onChange={(e) => handleSectionChange(idx, "content", e.target.value)}
+          />
+          {!s.content?.trim() && (
+            <p style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+              Leave empty to hide this section from the client
+            </p>
+          )}
+        </div>
+      ))}
+
+      {/* Print version of sections */}
+      {sections.filter(s => s.content?.trim()).map((s, i) => (
+        <div key={i} className="print-only" style={{ display: "none", pageBreakInside: "avoid", marginBottom: 20 }}>
+          <h3 style={{ fontFamily: font.display, color: C.terracotta, fontSize: 16, marginBottom: 8 }}>{s.title}</h3>
+          <p style={{ fontSize: 13, lineHeight: 1.8, whiteSpace: "pre-wrap", color: C.dark }}>{s.content}</p>
+        </div>
+      ))}
+
+      {/* Add custom section */}
+      <button
+        onClick={addCustomSection}
+        style={{ ...gStyle.btnSecondary, width: "100%", marginBottom: 16, borderStyle: "dashed" }}
+      >
+        + Add Custom Section
+      </button>
+
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          .print-only { display: block !important; }
+          body { background: white !important; }
         }
       `}</style>
     </div>
