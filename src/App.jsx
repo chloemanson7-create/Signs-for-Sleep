@@ -824,7 +824,7 @@ function CoachApp({ session, onLogout }) {
 
 function Header({ subtitle, right }) {
   return (
-    <div style={gStyle.header}>
+    <div style={gStyle.header} data-print-hide="true" className="no-print">
       <div>
         <div style={gStyle.logo}>Signs for Sleep</div>
         {subtitle && <span style={{ fontSize: 11, color: C.muted }}>{subtitle}</span>}
@@ -1364,7 +1364,7 @@ function ClientApp({ session, onLogout }) {
       )}
 
       {/* Tab bar */}
-      <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "0 24px", display: "flex", gap: 4 }}>
+      <div className="no-print" style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "0 24px", display: "flex", gap: 4 }}>
         {tabs.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             padding: "12px 20px", border: "none", background: "transparent", cursor: "pointer",
@@ -2230,7 +2230,7 @@ function SleepAnalysis({ client }) {
       {/* Print header — only shows when printing */}
       <div className="print-only" style={{ display: "none", marginBottom: 24 }}>
         <div style={{ fontFamily: font.display, fontSize: 24, color: C.terracotta }}>Signs for Sleep</div>
-        <div style={{ fontSize: 12, color: C.gold, letterSpacing: "0.1em", textTransform: "uppercase" }}>Gentle Sleep Consultant</div>
+        <div style={{ fontSize: 12, color: C.gold, letterSpacing: "0.05em" }}>Supporting sleep through connection and communication.</div>
         <div style={{ marginTop: 8, fontSize: 16, fontWeight: 700 }}>Sleep Analysis — {client.name}</div>
         <div style={{ fontSize: 12, color: C.muted }}>Generated {new Date().toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })}</div>
         <hr style={{ borderColor: C.border, margin: "12px 0" }} />
@@ -2316,6 +2316,10 @@ function SleepAnalysis({ client }) {
           .print-only { display: block !important; }
           body { background: white !important; }
           button { display: none !important; }
+          /* Hide app chrome — header, tabs, nav */
+          header, nav, [style*="sticky"], [style*="position: sticky"] { display: none !important; }
+          /* Hide tab bar */
+          div[style*="borderBottom"][style*="padding: \"0 24px\""] { display: none !important; }
         }
       `}</style>
     </div>
@@ -2506,9 +2510,8 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
         <div className="print-only" style={{ display: "none", marginBottom: 24, textAlign: "center" }}>
           <img src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
             alt="Signs for Sleep" style={{ maxWidth: 280, height: "auto" }} />
-          <div style={{ fontFamily: font.display, fontSize: 11, color: C.gold,
-            letterSpacing: "0.15em", textTransform: "uppercase", marginTop: 4 }}>
-            Gentle Sleep Consultant
+          <div style={{ fontSize: 12, color: C.gold, marginTop: 4 }}>
+            Supporting sleep through connection and communication.
           </div>
           <div style={{ fontFamily: font.display, fontSize: 20, color: C.terracotta, marginTop: 12 }}>
             Sleep Plan{childName ? ` for ${childName}` : ""}
@@ -2652,7 +2655,7 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
           alt="Signs for Sleep" style={{ maxWidth: 280, height: "auto" }} />
         <div style={{ fontFamily: font.display, fontSize: 11, color: C.gold,
           letterSpacing: "0.15em", textTransform: "uppercase", marginTop: 4 }}>
-          Gentle Sleep Consultant
+          Supporting sleep through connection and communication.
         </div>
         <div style={{ fontFamily: font.display, fontSize: 20, color: C.terracotta, marginTop: 12 }}>
           Sleep Plan{childName ? ` for ${childName}` : ""}
@@ -2719,6 +2722,11 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
           .no-print { display: none !important; }
           .print-only { display: block !important; }
           body { background: white !important; }
+          button { display: none !important; }
+          /* Hide app chrome — header, tabs, nav */
+          header, nav, [style*="sticky"], [style*="position: sticky"] { display: none !important; }
+          /* Hide tab bar */
+          div[style*="borderBottom"][style*="padding: \"0 24px\""] { display: none !important; }
         }
       `}</style>
     </div>
