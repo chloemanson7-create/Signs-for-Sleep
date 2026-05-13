@@ -1647,19 +1647,26 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     // Calculate nap total from current entry
     const totalNapMins = calcNapMins(data);
 
-    // Look up previous day's bed_time to calculate night sleep
-    // Use pure string arithmetic to avoid timezone issues with toISOString()
-    const prevDateStr = offsetDate(date, -1);
-    const { data: prevEntry } = await supabase
-      .from("sleep_diary").select("bed_time")
-      .eq("client_id", clientId).eq("date", prevDateStr).maybeSingle();
+    // ── NEW LOGIC: night_sleep and total_sleep_24h belong to the day the child went to sleep ──
+    // night_sleep on Day N = Day N bed_time → Day N+1 wake_time
+    // total_sleep_24h on Day N = Day N naps + Day N night sleep
+    // This means:
+    //   - When wake_time is entered on Day N, update YESTERDAY's night_sleep and total
+    //   - When bed_time is entered on Day N, calculate once tomorrow's wake is known
 
-    // Calculate night sleep: prev bed_time -> today wake_time
-    const nightSleep = calcNightSleep(prevEntry?.bed_time, data.wake_time);
+    const { id, created_at, ...rest } = data;
+
+    // Step 1: Calculate today's night sleep using TODAY's bed_time → TOMORROW's wake_time
+    const nextDateStr = offsetDate(date, +1);
+    const { data: nextEntry } = await supabase
+      .from("sleep_diary").select("id, wake_time, total_nap_mins")
+      .eq("client_id", clientId).eq("date", nextDateStr).maybeSingle();
+
+    const tomorrowWake = nextEntry?.wake_time ? nextEntry.wake_time.slice(0, 5) : null;
+    const nightSleep = calcNightSleep(rest.bed_time, tomorrowWake);
     const total24h = totalNapMins + (nightSleep || 0);
 
-    // Build payload — only include columns that exist in the database
-    const { id, created_at, ...rest } = data;
+    // Step 2: Build and save today's payload
     const payload = {
       client_id: clientId,
       date,
@@ -1677,7 +1684,6 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       total_sleep_24h: total24h,
     };
 
-    // Upsert using unique constraint on client_id + date
     const { error } = await supabase
       .from("sleep_diary")
       .upsert(payload, { onConflict: "client_id,date" });
@@ -1687,25 +1693,22 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       return;
     }
 
-    // When bed_time changes, update TOMORROW's night sleep
-    const nextDateStr = offsetDate(date, +1);
-    const { data: nextEntry } = await supabase
-      .from("sleep_diary").select("id, wake_time, total_nap_mins")
-      .eq("client_id", clientId).eq("date", nextDateStr).maybeSingle();
-    if (nextEntry?.id) {
-      // Use the bed_time we just saved (rest.bed_time) to calculate tomorrow's night
-      const bedTimeForNext = rest.bed_time || null;
-      const nextWakeTime = nextEntry.wake_time
-        ? nextEntry.wake_time.slice(0, 5) // normalise HH:MM:SS to HH:MM
-        : null;
-      const nextNightSleep = calcNightSleep(bedTimeForNext, nextWakeTime);
-      const nextTotal = (nextEntry.total_nap_mins || 0) + (nextNightSleep || 0);
+    // Step 3: When today's wake_time is entered, update YESTERDAY's night_sleep and total
+    // Because yesterday's night = yesterday bed → today wake
+    const prevDateStr = offsetDate(date, -1);
+    const { data: prevEntry } = await supabase
+      .from("sleep_diary").select("id, bed_time, total_nap_mins")
+      .eq("client_id", clientId).eq("date", prevDateStr).maybeSingle();
+    if (prevEntry?.id && prevEntry.bed_time) {
+      const prevNightSleep = calcNightSleep(prevEntry.bed_time, rest.wake_time);
+      const prevTotal = (prevEntry.total_nap_mins || 0) + (prevNightSleep || 0);
       await supabase.from("sleep_diary").update({
-        night_sleep_mins: nextNightSleep,
-        total_sleep_24h: nextTotal,
-      }).eq("id", nextEntry.id);
+        night_sleep_mins: prevNightSleep,
+        total_sleep_24h: prevTotal,
+      }).eq("id", prevEntry.id);
     }
-    // Update local state with calculated values so display refreshes immediately
+
+    // Step 4: Update local state so display refreshes immediately
     setEntry(prev => prev ? {
       ...prev,
       total_nap_mins: totalNapMins,
@@ -1839,7 +1842,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10, marginBottom: 20 }}>
         {[
           { label: "Total nap sleep", value: fmtDuration(totalNapMins) },
-          { label: "Night sleep", value: nightSleepMins ? fmtDuration(nightSleepMins) : "Enter wake & prev bedtime" },
+          { label: "Tonight's sleep", value: nightSleepMins ? fmtDuration(nightSleepMins) : "Enter bedtime + tomorrow's wake" },
           { label: "Total sleep (24h)", value: fmtDuration(total24h) },
           { label: "Naps today", value: entry.naps?.filter(n => n.start && n.end).length || 0 },
         ].map((s) => (
@@ -2029,11 +2032,26 @@ function SleepAnalysis({ client }) {
   );
 
   // ── Compute metrics per day ──────────────────────────────
-  const days = entries.map(e => {
+  // Option B: For analysis, calculate night sleep using BACKWARD direction
+  // (prev bed → current wake) so every day from Day 2 has complete data.
+  // This gives better averages — only Day 1 is incomplete, not the last day.
+  // The diary display uses forward direction (bed → next wake) for client clarity.
+
+  const days = entries.map((e, idx) => {
     const napMins = e.total_nap_mins || 0;
-    const nightMins = e.night_sleep_mins || null;
-    const totalMins = e.total_sleep_24h || 0;
     const napCount = Array.isArray(e.naps) ? e.naps.filter(n => n.start && n.end).length : 0;
+
+    // Option B: backward night sleep calc (prev bed → today wake) for analysis accuracy
+    const prevEntry = idx > 0 ? entries[idx - 1] : null;
+    const backwardNightMins = prevEntry?.bed_time && e.wake_time
+      ? calcNightSleep(prevEntry.bed_time, e.wake_time)
+      : null;
+
+    // Option D: only include total if we have BOTH nap and night data
+    // Use backward night sleep for analysis totals
+    const totalMins = backwardNightMins !== null
+      ? napMins + backwardNightMins
+      : null; // null = incomplete, excluded from averages
 
     // Wake windows: time from wake to first nap, between naps, last nap to bed
     const wakeWindows = [];
@@ -2063,21 +2081,28 @@ function SleepAnalysis({ client }) {
     return {
       date: e.date,
       label: new Date(e.date + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "short" }),
-      napMins, nightMins, totalMins, napCount, avgWW, nightWakings, wakeTime,
+      napMins,
+      nightMins: backwardNightMins, // backward direction for analysis
+      totalMins,                    // null if incomplete (excluded from avg)
+      napCount, avgWW, nightWakings, wakeTime,
     };
   });
 
-  // ── Averages ─────────────────────────────────────────────
+  // ── Averages — Option D: exclude incomplete days (null values) ────────────
   const avg = (arr) => {
+    // Filter out nulls AND zeros — only average days with real data
     const valid = arr.filter(v => v !== null && v > 0);
     return valid.length > 0 ? Math.round(valid.reduce((a,b) => a+b,0) / valid.length) : null;
   };
-  const avgNap = avg(days.map(d => d.napMins));
-  const avgNight = avg(days.map(d => d.nightMins));
-  const avgTotal = avg(days.map(d => d.totalMins));
+  const avgNap      = avg(days.map(d => d.napMins));
+  const avgNight    = avg(days.map(d => d.nightMins));   // excludes Day 1 (no prev bed)
+  const avgTotal    = avg(days.map(d => d.totalMins));   // excludes any day without both
   const avgNapCount = avg(days.map(d => d.napCount));
-  const avgWW = avg(days.map(d => d.avgWW));
+  const avgWW       = avg(days.map(d => d.avgWW));
   const avgNightWakings = avg(days.map(d => d.nightWakings));
+
+  // Count of complete days (for display)
+  const completeDays = days.filter(d => d.totalMins !== null).length;
 
   // ── SVG line chart helper ─────────────────────────────────
   const LineChart = ({ data, color, label, yLabel }) => {
@@ -2216,7 +2241,7 @@ function SleepAnalysis({ client }) {
             Sleep Analysis
           </h2>
           <p style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>
-            Based on {entries.length} day{entries.length !== 1 ? "s" : ""} of diary data
+            {entries.length} days logged · {completeDays} complete · averages exclude incomplete days
           </p>
         </div>
         <button
@@ -2244,7 +2269,7 @@ function SleepAnalysis({ client }) {
           { label: "Avg total 24h", value: fmtDuration(avgTotal), color: C.gold, sub: "all sleep" },
           { label: "Avg wake window", value: fmtDuration(avgWW), color: C.blueDark, sub: "between sleeps" },
           { label: "Avg night wakings", value: avgNightWakings !== null ? avgNightWakings : "—", color: C.terracottaDark, sub: "times per night" },
-          { label: "Days logged", value: entries.length, color: C.mid, sub: "diary entries" },
+          { label: "Days logged", value: entries.length, color: C.mid, sub: `${completeDays} complete` },
         ].map((s) => (
           <div key={s.label} style={{
             background: C.white, border: `1px solid ${C.border}`,
