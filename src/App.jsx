@@ -1786,7 +1786,7 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
 
 // ── SLEEP DIARY ─────────────────────────────────────────────────────────────
 const BOOKING_URL = "https://calendar.app.google/UJPyiq6md5VCxfuV6";
-const CHECKIN_BOOKING_URL = "https://calendar.app.google/zSnQxyG6BEYxUVch9";
+const CHECKIN_BOOKING_URL = "https://calendar.google.com/appointments/schedules/AcZssZ28w4KBVKbT8lWv6TetMMAUl_JlrlPHa2xXyRd3Ym1V6ve6xFfvz2AXvlIrReJf-Jwvp6n1RH9K";
 const DIARY_DAYS_REQUIRED = 5;
 const CHECKIN_UNLOCK_DAYS = 7;
 
