@@ -476,6 +476,7 @@ const INTAKE_SECTIONS = [
       { key: "medications", label: "Is your child taking any prescribed, over the counter, herbal or naturopathic medicines, vitamins or supplements?", type: "textarea" },
       { key: "weight_concerns", label: "Are there any concerns about your child's weight?", type: "textarea" },
       { key: "other_practitioners", label: "Is your child currently seeing any other health care professional or alternative/complementary therapist? Please specify:", type: "textarea" },
+      { key: "snoring", label: "Does your child ever snore and/or sleep with their mouth open? If so, how often and for how long?", type: "textarea" },
       { key: "health_notes", label: "Any other health information you'd like me to know?", type: "textarea" },
     ],
   },
@@ -1201,9 +1202,36 @@ function ClientSettings({ client, onRefresh, onDelete }) {
   const [contactEvery, setContactEvery] = useState(client.contact_every_days || DEFAULT_CONTACT_EVERY);
   const [code, setCode] = useState(client.access_code);
   const [startDate, setStartDate] = useState(client.support_start_date || today());
+  const [packageStartDate, setPackageStartDate] = useState(client.package_start_date || "");
+  const [pkg, setPkg] = useState(client.package || "");
+  const [extensionWeeks, setExtensionWeeks] = useState(client.extension_weeks || 0);
+  const [callsUsed, setCallsUsed] = useState(client.calls_used || 0);
+  const [consultBooked, setConsultBooked] = useState(client.consult_booked || false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // When package changes, auto-set support days and calls total
+  const handlePackageChange = (newPkg) => {
+    setPkg(newPkg);
+    if (newPkg && PACKAGES[newPkg]) {
+      const baseDays = PACKAGES[newPkg].days + (extensionWeeks * EXTENSION.days);
+      const baseCalls = PACKAGES[newPkg].calls + (extensionWeeks * EXTENSION.calls);
+      setSupportDays(baseDays);
+    }
+  };
+
+  const handleExtensionChange = (weeks) => {
+    const w = parseInt(weeks) || 0;
+    setExtensionWeeks(w);
+    if (pkg && PACKAGES[pkg]) {
+      setSupportDays(PACKAGES[pkg].days + (w * EXTENSION.days));
+    }
+  };
+
+  const callsTotal = pkg && PACKAGES[pkg]
+    ? PACKAGES[pkg].calls + (extensionWeeks * EXTENSION.calls)
+    : extensionWeeks * EXTENSION.calls;
 
   const save = async () => {
     setSaving(true);
@@ -1212,6 +1240,12 @@ function ClientSettings({ client, onRefresh, onDelete }) {
       contact_every_days: parseInt(contactEvery),
       access_code: code.toUpperCase(),
       support_start_date: startDate,
+      package: pkg || null,
+      package_start_date: packageStartDate || null,
+      extension_weeks: extensionWeeks,
+      calls_total: callsTotal,
+      calls_used: callsUsed,
+      consult_booked: consultBooked,
     }).eq("id", client.id);
     setSaving(false);
     setMsg("Saved!");
@@ -1226,6 +1260,99 @@ function ClientSettings({ client, onRefresh, onDelete }) {
 
   return (
     <div>
+      {/* Package Selection */}
+      <div style={gStyle.card}>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 16px" }}>Package</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+          {/* Package selector */}
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={gStyle.label}>Package</label>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {[
+                { key: "", label: "None" },
+                { key: "gentle_start", label: `Gentle Start — ${PACKAGES.gentle_start.weeks}wk ${PACKAGES.gentle_start.price}` },
+                { key: "foundations", label: `Foundations — ${PACKAGES.foundations.weeks}wk ${PACKAGES.foundations.price}` },
+              ].map(opt => (
+                <button key={opt.key} onClick={() => handlePackageChange(opt.key)} style={{
+                  padding: "8px 14px", borderRadius: 8, border: "none", cursor: "pointer",
+                  fontFamily: font.body, fontSize: 13, fontWeight: 600,
+                  background: pkg === opt.key ? C.terracotta : C.terracottaLight,
+                  color: pkg === opt.key ? C.white : C.terracottaDark,
+                }}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Extension weeks */}
+          <div>
+            <label style={gStyle.label}>Extension Weeks (+{EXTENSION.price}/wk)</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button onClick={() => handleExtensionChange(Math.max(0, extensionWeeks - 1))}
+                style={{ ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 16 }}>−</button>
+              <span style={{ fontSize: 18, fontWeight: 700, color: C.terracotta, minWidth: 24, textAlign: "center" }}>
+                {extensionWeeks}
+              </span>
+              <button onClick={() => handleExtensionChange(extensionWeeks + 1)}
+                style={{ ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 16 }}>+</button>
+              {extensionWeeks > 0 && (
+                <span style={{ fontSize: 12, color: C.muted }}>
+                  +{extensionWeeks * EXTENSION.days}d, +{extensionWeeks * EXTENSION.calls} call{extensionWeeks > 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Consult booked toggle */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input type="checkbox" id="consultBooked" checked={consultBooked}
+              onChange={(e) => setConsultBooked(e.target.checked)}
+              style={{ accentColor: C.terracotta, width: 16, height: 16 }} />
+            <label htmlFor="consultBooked" style={{ fontSize: 13, color: C.dark, cursor: "pointer" }}>
+              Initial consult booked
+            </label>
+          </div>
+        </div>
+
+        {/* Call tracking — Foundations or Extension only */}
+        {callsTotal > 0 && (
+          <div style={{ background: C.blueLight, borderRadius: 10, padding: "14px 16px", marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: C.blueDark }}>
+                Check-in calls: {callsUsed} of {callsTotal} used · {Math.max(0, callsTotal - callsUsed)} remaining
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              {Array.from({ length: callsTotal }).map((_, i) => (
+                <div key={i} style={{
+                  width: 32, height: 32, borderRadius: "50%", display: "flex",
+                  alignItems: "center", justifyContent: "center", fontSize: 14,
+                  background: i < callsUsed ? C.blue : C.white,
+                  border: `2px solid ${i < callsUsed ? C.blue : C.border}`,
+                  color: i < callsUsed ? C.white : C.muted,
+                  cursor: "pointer",
+                }} onClick={() => setCallsUsed(i < callsUsed ? i : i + 1)}
+                  title={i < callsUsed ? "Click to unmark" : "Click to mark as used"}>
+                  {i < callsUsed ? "✓" : i + 1}
+                </div>
+              ))}
+              <span style={{ fontSize: 11, color: C.muted, marginLeft: 4 }}>Click to mark used</span>
+            </div>
+          </div>
+        )}
+
+        {/* Package summary */}
+        {pkg && (
+          <div style={{ background: C.goldLight, borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 13, color: C.dark }}>
+            {PACKAGES[pkg].label} · {parseInt(supportDays)} days total
+            {extensionWeeks > 0 ? ` (incl. ${extensionWeeks} extension wk${extensionWeeks > 1 ? "s" : ""})` : ""}
+            {callsTotal > 0 ? ` · ${callsTotal} check-in calls` : ""}
+          </div>
+        )}
+      </div>
+
+      {/* General settings */}
       <div style={gStyle.card}>
         <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 20px" }}>Client Settings</h3>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
@@ -1236,6 +1363,10 @@ function ClientSettings({ client, onRefresh, onDelete }) {
           <div>
             <label style={gStyle.label}>Support start date</label>
             <input style={gStyle.input} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </div>
+          <div>
+            <label style={gStyle.label}>Package start date (auto-set)</label>
+            <input style={gStyle.input} type="date" value={packageStartDate} onChange={(e) => setPackageStartDate(e.target.value)} />
           </div>
           <div>
             <label style={gStyle.label}>Support period (days)</label>
@@ -1333,8 +1464,11 @@ function CoachSettings({ onBack }) {
 function ClientApp({ session, onLogout }) {
   const [tab, setTab] = useState("diary");
   const [hasIntake, setHasIntake] = useState(null);
+  const [clientPackage, setClientPackage] = useState(null);
+  const [diaryCount, setDiaryCount] = useState(0);
 
   useEffect(() => {
+    // Load intake completion
     supabase.from("intake_responses").select("id, completed")
       .eq("client_id", session.clientId).maybeSingle()
       .then(({ data }) => {
@@ -1342,6 +1476,14 @@ function ClientApp({ session, onLogout }) {
         setHasIntake(done);
         if (!done) setTab("intake");
       });
+    // Load package info
+    supabase.from("clients").select("package, extension_weeks, calls_total, calls_used, consult_booked")
+      .eq("id", session.clientId).maybeSingle()
+      .then(({ data }) => { if (data) setClientPackage(data); });
+    // Load diary count
+    supabase.from("sleep_diary").select("id", { count: "exact", head: true })
+      .eq("client_id", session.clientId)
+      .then(({ count }) => setDiaryCount(count || 0));
   }, [session.clientId]);
 
   const tabs = [
@@ -1349,6 +1491,16 @@ function ClientApp({ session, onLogout }) {
     { key: "intake", label: "Questionnaire" },
     { key: "plan", label: "📋 Sleep Plan" },
   ];
+
+  // Check-in call eligibility
+  const hasFoundations = clientPackage?.package === "foundations";
+  const hasExtension = (clientPackage?.extension_weeks || 0) > 0;
+  const callsTotal = clientPackage?.calls_total || 0;
+  const callsUsed = clientPackage?.calls_used || 0;
+  const callsRemaining = Math.max(0, callsTotal - callsUsed);
+  const checkinUnlocked = diaryCount >= CHECKIN_UNLOCK_DAYS &&
+    hasIntake && clientPackage?.consult_booked &&
+    (hasFoundations || hasExtension) && callsRemaining > 0;
 
   return (
     <div style={gStyle.app}>
@@ -1364,17 +1516,46 @@ function ClientApp({ session, onLogout }) {
       )}
 
       {/* Tab bar */}
-      <div className="no-print" style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "0 24px", display: "flex", gap: 4 }}>
+      <div className="no-print" style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "0 16px", display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap" }}>
         {tabs.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
-            padding: "12px 20px", border: "none", background: "transparent", cursor: "pointer",
+            padding: "12px 16px", border: "none", background: "transparent", cursor: "pointer",
             fontFamily: font.body, fontSize: 14, fontWeight: 600,
             color: tab === t.key ? C.terracotta : C.muted,
             borderBottom: tab === t.key ? `2px solid ${C.terracotta}` : "2px solid transparent",
+            whiteSpace: "nowrap",
           }}>
             {t.label}
           </button>
         ))}
+        {/* Book a Call button — only for eligible clients */}
+        {checkinUnlocked && (
+          <a
+            href={CHECKIN_BOOKING_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              marginLeft: "auto",
+              padding: "8px 16px",
+              background: C.terracotta,
+              color: C.white,
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 600,
+              fontFamily: font.body,
+              textDecoration: "none",
+              whiteSpace: "nowrap",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            📞 Book a Call
+            <span style={{ background: "rgba(255,255,255,0.25)", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>
+              {callsRemaining} left
+            </span>
+          </a>
+        )}
       </div>
 
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
@@ -1482,6 +1663,21 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
         body: { clientName: clientData?.name || "A client", clientId },
       });
     } catch (e) { console.error("Email notify error:", e); }
+
+    // Auto-set package_start_date if intake + diary both complete and date not yet set
+    try {
+      const { data: clientRow } = await supabase
+        .from("clients").select("package_start_date").eq("id", clientId).maybeSingle();
+      if (!clientRow?.package_start_date) {
+        const { count } = await supabase
+          .from("sleep_diary").select("id", { count: "exact", head: true })
+          .eq("client_id", clientId);
+        if ((count || 0) >= 5) {
+          await supabase.from("clients").update({ package_start_date: today() }).eq("id", clientId);
+        }
+      }
+    } catch (e) { /* silent */ }
+
     setSaving(false);
     onComplete();
   };
@@ -1590,7 +1786,15 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
 
 // ── SLEEP DIARY ─────────────────────────────────────────────────────────────
 const BOOKING_URL = "https://calendar.app.google/UJPyiq6md5VCxfuV6";
+const CHECKIN_BOOKING_URL = "https://calendar.app.google/zSnQxyG6BEYxUVch9";
 const DIARY_DAYS_REQUIRED = 5;
+const CHECKIN_UNLOCK_DAYS = 7;
+
+const PACKAGES = {
+  gentle_start:  { label: "Gentle Start",       weeks: 4, days: 28, calls: 0, price: "$425" },
+  foundations:   { label: "Foundations of Sleep", weeks: 6, days: 42, calls: 6, price: "$695" },
+};
+const EXTENSION = { label: "Extension Week", days: 7, calls: 1, price: "$175" };
 
 const emptyNap = () => ({ start: "", end: "", how_fell_asleep: "", location: "", resettled: "", notes: "" });
 const emptyEntry = () => ({
@@ -1720,6 +1924,26 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 2000);
     loadDiaryCount();
+
+    // Auto-set package_start_date when 5th diary entry saved + intake complete
+    if (!isCoach) {
+      try {
+        const { count } = await supabase
+          .from("sleep_diary").select("id", { count: "exact", head: true })
+          .eq("client_id", clientId);
+        if ((count || 0) >= 5) {
+          const { data: clientRow } = await supabase
+            .from("clients").select("package_start_date").eq("id", clientId).maybeSingle();
+          if (!clientRow?.package_start_date) {
+            const { data: intakeRow } = await supabase
+              .from("intake_responses").select("completed").eq("client_id", clientId).maybeSingle();
+            if (intakeRow?.completed) {
+              await supabase.from("clients").update({ package_start_date: today() }).eq("id", clientId);
+            }
+          }
+        }
+      } catch (e) { /* silent */ }
+    }
   };
 
   // Each field update saves immediately
