@@ -1786,7 +1786,7 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
 
 // ── SLEEP DIARY ─────────────────────────────────────────────────────────────
 const BOOKING_URL = "https://calendar.app.google/UJPyiq6md5VCxfuV6";
-const CHECKIN_BOOKING_URL = "https://calendar.google.com/appointments/schedules/AcZssZ28w4KBVKbT8lWv6TetMMAUl_JlrlPHa2xXyRd3Ym1V6ve6xFfvz2AXvlIrReJf-Jwvp6n1RH9K";
+const CHECKIN_BOOKING_URL = "https://calendar.app.google/zSnQxyG6BEYxUVch9";
 const DIARY_DAYS_REQUIRED = 5;
 const CHECKIN_UNLOCK_DAYS = 7;
 
@@ -2301,14 +2301,15 @@ function SleepAnalysis({ client }) {
     const nightWakings = e.night_wakings_count !== null && e.night_wakings_count !== ""
       ? parseInt(e.night_wakings_count) : null;
     const wakeTime = e.wake_time || null;
+    const bedTime = e.bed_time || null;
 
     return {
       date: e.date,
       label: new Date(e.date + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "short" }),
       napMins,
-      nightMins: backwardNightMins, // backward direction for analysis
-      totalMins,                    // null if incomplete (excluded from avg)
-      napCount, avgWW, nightWakings, wakeTime,
+      nightMins: backwardNightMins,
+      totalMins,
+      napCount, avgWW, nightWakings, wakeTime, bedTime,
     };
   });
 
@@ -2449,7 +2450,18 @@ function SleepAnalysis({ client }) {
       data: days.map(d => ({
         label: d.label,
         value: d.wakeTime ? parseTime(d.wakeTime) : null,
-        displayValue: d.wakeTime || null,
+        displayValue: d.wakeTime ? (() => { const p = parse24ToWheel(d.wakeTime); return p.h !== null ? `${p.h}:${String(p.m).padStart(2,"0")} ${p.ampm.toUpperCase()}` : d.wakeTime; })() : null,
+      })),
+      yLabel: "time",
+    },
+    {
+      label: "Time Went to Sleep",
+      avg: null,
+      color: C.terracottaDark,
+      data: days.map(d => ({
+        label: d.label,
+        value: d.bedTime ? parseTime(d.bedTime) : null,
+        displayValue: d.bedTime ? (() => { const p = parse24ToWheel(d.bedTime); return p.h !== null ? `${p.h}:${String(p.m).padStart(2,"0")} ${p.ampm.toUpperCase()}` : d.bedTime; })() : null,
       })),
       yLabel: "time",
     },
@@ -2536,7 +2548,7 @@ function SleepAnalysis({ client }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: `2px solid ${C.border}` }}>
-                {["Date", "Wake Time", "Naps", "Nap Sleep", "Night Sleep", "Total 24h", "Avg Wake Window", "Night Wakings"].map(h => (
+                {["Date", "Wake Time", "Bedtime", "Naps", "Nap Sleep", "Night Sleep", "Total 24h", "Avg Wake Window", "Night Wakings"].map(h => (
                   <th key={h} style={{ padding: "8px 10px", textAlign: "left", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</th>
                 ))}
               </tr>
@@ -2545,7 +2557,12 @@ function SleepAnalysis({ client }) {
               {days.map((d, i) => (
                 <tr key={d.date} style={{ borderBottom: `1px solid ${C.border}`, background: i % 2 === 0 ? C.white : C.cream }}>
                   <td style={{ padding: "8px 10px", fontWeight: 600, color: C.dark }}>{d.label}</td>
-                  <td style={{ padding: "8px 10px", color: C.gold }}>{d.wakeTime || "—"}</td>
+                  <td style={{ padding: "8px 10px", color: C.gold }}>
+                    {d.wakeTime ? (() => { const p = parse24ToWheel(d.wakeTime); return p.h !== null ? `${p.h}:${String(p.m).padStart(2,"0")} ${p.ampm.toUpperCase()}` : d.wakeTime; })() : "—"}
+                  </td>
+                  <td style={{ padding: "8px 10px", color: C.terracottaDark }}>
+                    {d.bedTime ? (() => { const p = parse24ToWheel(d.bedTime); return p.h !== null ? `${p.h}:${String(p.m).padStart(2,"0")} ${p.ampm.toUpperCase()}` : d.bedTime; })() : "—"}
+                  </td>
                   <td style={{ padding: "8px 10px", color: C.mid }}>{d.napCount}</td>
                   <td style={{ padding: "8px 10px", color: C.blue }}>{fmtDuration(d.napMins)}</td>
                   <td style={{ padding: "8px 10px", color: C.terracotta }}>{fmtDuration(d.nightMins)}</td>
