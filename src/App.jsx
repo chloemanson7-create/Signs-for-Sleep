@@ -934,13 +934,20 @@ function Dashboard({ clients, loading, onSelectClient, onRefresh }) {
           <p style={{ fontSize: 16 }}>No clients yet. Click "+ Add Client" to get started.</p>
         </div>
       ) : (
-        filtered.map((c) => <ClientCard key={c.id} client={c} onClick={() => onSelectClient(c)} />)
+        filtered.map((c) => <ClientCard key={c.id} client={c} onClick={() => onSelectClient(c)} onRefresh={onRefresh} />)
       )}
     </>
   );
 }
 
-function ClientCard({ client, onClick }) {
+// Testimonial status config
+const TESTIMONIAL_STATUSES = [
+  { key: "requested",   label: "Requested",   color: C.blue,          bg: C.blueLight },
+  { key: "followed_up", label: "Followed up",  color: C.gold,          bg: C.goldLight },
+  { key: "received",    label: "Received ✓",   color: C.success,       bg: C.successLight },
+];
+
+function ClientCard({ client, onClick, onRefresh }) {
   const start = client.support_start_date;
   const daysElapsed = start ? daysBetween(start, today()) : 0;
   const total = client.support_days || DEFAULT_SUPPORT_DAYS;
@@ -953,6 +960,20 @@ function ClientCard({ client, onClick }) {
     : daysElapsed;
   const contactDue = daysSinceContact >= contactEvery && client.status === "active";
 
+  const pkg = client.package && PACKAGES[client.package] ? PACKAGES[client.package] : null;
+  const testimonialStatus = TESTIMONIAL_STATUSES.find(s => s.key === client.testimonial_status);
+
+  const cycleTestimonial = async (e) => {
+    e.stopPropagation(); // don't open client detail
+    const keys = [null, "requested", "followed_up", "received"];
+    const current = keys.indexOf(client.testimonial_status || null);
+    const next = keys[(current + 1) % keys.length];
+    await supabase.from("clients")
+      .update({ testimonial_status: next })
+      .eq("id", client.id);
+    onRefresh();
+  };
+
   return (
     <div onClick={onClick} style={{
       ...gStyle.card, cursor: "pointer",
@@ -962,12 +983,25 @@ function ClientCard({ client, onClick }) {
       onMouseEnter={(e) => e.currentTarget.style.boxShadow = "0 4px 16px rgba(196,113,74,0.12)"}
       onMouseLeave={(e) => e.currentTarget.style.boxShadow = "none"}
     >
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: 16, color: C.dark }}>{client.name}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 700, fontSize: 16, color: C.dark }}>{client.name}</span>
+            {/* Package badge */}
+            {pkg && (
+              <span style={gStyle.tag(C.terracottaDark, C.terracottaLight)}>
+                {pkg.label}
+              </span>
+            )}
+            {(client.extension_weeks || 0) > 0 && (
+              <span style={gStyle.tag(C.gold, C.goldLight)}>
+                +{client.extension_weeks}wk
+              </span>
+            )}
+          </div>
           <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Code: {client.access_code}</div>
         </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", alignItems: "flex-start" }}>
           <span style={gStyle.tag(client.status === "active" ? C.success : C.muted, client.status === "active" ? C.successLight : "#f0f0f0")}>
             {client.status}
           </span>
@@ -982,11 +1016,27 @@ function ClientCard({ client, onClick }) {
             <span>Day {daysElapsed} of {total}</span>
             <span>{daysLeft} days remaining</span>
           </div>
-          <div style={{ height: 6, background: C.terracottaLight, borderRadius: 3, overflow: "hidden" }}>
+          <div style={{ height: 6, background: C.terracottaLight, borderRadius: 3, overflow: "hidden", marginBottom: 10 }}>
             <div style={{ height: "100%", width: `${pct}%`, background: ending ? C.danger : C.terracotta, borderRadius: 3, transition: "width 0.3s" }} />
           </div>
         </>
       )}
+
+      {/* Testimonial button */}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          onClick={cycleTestimonial}
+          style={{
+            padding: "5px 12px", borderRadius: 20, border: "none",
+            cursor: "pointer", fontFamily: font.body, fontSize: 11, fontWeight: 600,
+            background: testimonialStatus ? testimonialStatus.bg : "#f0f0f0",
+            color: testimonialStatus ? testimonialStatus.color : C.muted,
+          }}
+          title="Click to cycle through testimonial status"
+        >
+          ⭐ {testimonialStatus ? testimonialStatus.label : "Testimonial"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1207,6 +1257,8 @@ function ClientSettings({ client, onRefresh, onDelete }) {
   const [extensionWeeks, setExtensionWeeks] = useState(client.extension_weeks || 0);
   const [callsUsed, setCallsUsed] = useState(client.calls_used || 0);
   const [consultBooked, setConsultBooked] = useState(client.consult_booked || false);
+  const [testimonialText, setTestimonialText] = useState(client.testimonial_text || "");
+  const [feedbackText, setFeedbackText] = useState(client.feedback_text || "");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1242,6 +1294,8 @@ function ClientSettings({ client, onRefresh, onDelete }) {
       support_start_date: startDate,
       package: pkg || null,
       package_start_date: packageStartDate || null,
+      testimonial_text: testimonialText || null,
+      feedback_text: feedbackText || null,
       extension_weeks: extensionWeeks,
       calls_total: callsTotal,
       calls_used: callsUsed,
@@ -1381,6 +1435,32 @@ function ClientSettings({ client, onRefresh, onDelete }) {
         <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={save} disabled={saving}>
           {saving ? "Saving…" : "Save Changes"}
         </button>
+      </div>
+
+      {/* Testimonial & Feedback */}
+      <div style={gStyle.card}>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 16px" }}>Testimonial & Feedback</h3>
+        <div style={{ marginBottom: 16 }}>
+          <label style={gStyle.label}>Testimonial</label>
+          <textarea
+            style={{ ...gStyle.input, minHeight: 100, resize: "vertical", lineHeight: 1.6 }}
+            placeholder="Paste client testimonial here once received…"
+            value={testimonialText}
+            onChange={(e) => setTestimonialText(e.target.value)}
+          />
+        </div>
+        <div>
+          <label style={gStyle.label}>Feedback / Notes</label>
+          <textarea
+            style={{ ...gStyle.input, minHeight: 100, resize: "vertical", lineHeight: 1.6 }}
+            placeholder="Private feedback or notes about this client's program…"
+            value={feedbackText}
+            onChange={(e) => setFeedbackText(e.target.value)}
+          />
+        </div>
+        <p style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>
+          Saved when you click Save Changes above. Not visible to the client.
+        </p>
       </div>
 
       <div style={{ ...gStyle.card, borderColor: C.danger }}>
