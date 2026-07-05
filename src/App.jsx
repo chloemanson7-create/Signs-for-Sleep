@@ -1058,6 +1058,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
     { key: "diary", label: "Sleep Diary" },
     { key: "analysis", label: "📊 Analysis" },
     { key: "plan", label: "📋 Sleep Plan" },
+    { key: "toolbox", label: "🧰 Toolbox" },
     { key: "notes", label: "Notes" },
     { key: "settings", label: "Settings" },
   ];
@@ -1090,6 +1091,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
       {tab === "diary" && <SleepDiaryViewer clientId={client.id} isCoach />}
       {tab === "analysis" && <SleepAnalysis client={clientData} />}
       {tab === "plan" && <SleepPlanEditor clientId={client.id} clientData={clientData} isCoach={true} />}
+      {tab === "toolbox" && <KnowledgeToolbox clientId={client.id} clientData={clientData} isCoach={true} />}
       {tab === "notes" && <CoachNotes clientId={client.id} />}
       {tab === "settings" && <ClientSettings client={clientData} onRefresh={refresh} onDelete={onBack} />}
     </>
@@ -1570,6 +1572,7 @@ function ClientApp({ session, onLogout }) {
     { key: "diary", label: "Sleep Diary" },
     { key: "intake", label: "Questionnaire" },
     { key: "plan", label: "📋 Sleep Plan" },
+    { key: "toolbox", label: "🧰 Toolbox" },
   ];
 
   // Check-in call eligibility
@@ -1641,6 +1644,7 @@ function ClientApp({ session, onLogout }) {
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
         {tab === "diary" && <SleepDiaryViewer clientId={session.clientId} isCoach={false} />}
         {tab === "plan" && <SleepPlanEditor clientId={session.clientId} isCoach={false} />}
+        {tab === "toolbox" && <KnowledgeToolbox clientId={session.clientId} isCoach={false} />}
         {tab === "intake" && (
           <IntakeForm
             clientId={session.clientId}
@@ -3073,6 +3077,484 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
           header, nav, [style*="sticky"], [style*="position: sticky"] { display: none !important; }
           /* Hide tab bar */
           div[style*="borderBottom"][style*="padding: \"0 24px\""] { display: none !important; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// KNOWLEDGE TOOLBOX — client offboarding document
+// ═══════════════════════════════════════════════════════════════════════════
+
+const emptyTile = () => ({
+  id: Math.random().toString(36).slice(2),
+  situation: "",
+  strategy_id: "",
+  strategy_title: "",
+  strategy_description: "",
+});
+
+// Turns a DOB into a friendly age label, e.g. "20 months" or "2y 3m"
+function ageFromDOB(dobStr, atDate) {
+  if (!dobStr) return "";
+  const dob = new Date(dobStr + "T00:00:00");
+  const at = new Date((atDate || today()) + "T00:00:00");
+  let months = (at.getFullYear() - dob.getFullYear()) * 12 + (at.getMonth() - dob.getMonth());
+  if (at.getDate() < dob.getDate()) months--;
+  if (months < 0) months = 0;
+  if (months < 24) return `${months} month${months !== 1 ? "s" : ""}`;
+  const years = Math.floor(months / 12);
+  const remMonths = months % 12;
+  return remMonths === 0 ? `${years} year${years !== 1 ? "s" : ""} old` : `${years}y ${remMonths}m`;
+}
+
+// ── STRATEGY LIBRARY MANAGER (coach only) ───────────────────────────────────
+// Lets Chloé add/edit/delete strategies without touching code.
+function StrategyLibraryManager({ library, onRefresh, onClose }) {
+  const [title, setTitle] = useState("");
+  const [desc, setDesc] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+
+  const addStrategy = async () => {
+    if (!title.trim() || !desc.trim()) return;
+    setSaving(true);
+    if (editingId) {
+      await supabase.from("strategy_library")
+        .update({ title: title.trim(), description: desc.trim() })
+        .eq("id", editingId);
+    } else {
+      await supabase.from("strategy_library")
+        .insert({ title: title.trim(), description: desc.trim(), sort_order: library.length });
+    }
+    setTitle(""); setDesc(""); setEditingId(null);
+    setSaving(false);
+    onRefresh();
+  };
+
+  const editStrategy = (s) => { setEditingId(s.id); setTitle(s.title); setDesc(s.description); };
+
+  const deleteStrategy = async (id) => {
+    await supabase.from("strategy_library").delete().eq("id", id);
+    onRefresh();
+  };
+
+  return (
+    <div style={{ ...gStyle.card, borderColor: C.gold, marginBottom: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h3 style={{ fontFamily: font.display, color: C.gold, margin: 0 }}>Manage Strategy Library</h3>
+        <button style={gStyle.btnSecondary} onClick={onClose}>Close</button>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <label style={gStyle.label}>Strategy name</label>
+        <input style={{ ...gStyle.input, marginBottom: 10 }} value={title}
+          onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Sleep pressure" />
+        <label style={gStyle.label}>Description</label>
+        <textarea style={{ ...gStyle.input, minHeight: 70, resize: "vertical", marginBottom: 10 }}
+          value={desc} onChange={(e) => setDesc(e.target.value)}
+          placeholder="How this strategy works…" />
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={addStrategy} disabled={saving}>
+            {editingId ? "Save changes" : "+ Add strategy"}
+          </button>
+          {editingId && (
+            <button style={gStyle.btnSecondary} onClick={() => { setEditingId(null); setTitle(""); setDesc(""); }}>
+              Cancel edit
+            </button>
+          )}
+        </div>
+      </div>
+
+      {library.length > 0 && (
+        <div>
+          {library.map((s) => (
+            <div key={s.id} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+              padding: "10px 0", borderTop: `1px solid ${C.border}`, gap: 12,
+            }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: C.dark }}>{s.title}</div>
+                <div style={{ fontSize: 12, color: C.mid, marginTop: 2 }}>{s.description}</div>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <button style={{ ...gStyle.btnSecondary, padding: "4px 10px", fontSize: 12 }} onClick={() => editStrategy(s)}>Edit</button>
+                <button style={{ ...gStyle.btnDanger, padding: "4px 10px", fontSize: 12 }} onClick={() => deleteStrategy(s.id)}>Delete</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SHARED HEADER (used by both coach + client + print views) ──────────────
+function ToolboxHeader({ toolbox }) {
+  return (
+    <div style={{ marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${C.gold}` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>
+            Knowledge Toolbox
+          </div>
+          <div style={{ fontFamily: font.display, fontSize: 28, color: C.dark }}>{toolbox.title || "—"}</div>
+          <div style={{ fontSize: 13, color: C.mid, marginTop: 4 }}>
+            Prepared by Chloé
+            {toolbox.prepared_date ? ` · ${new Date(toolbox.prepared_date + "T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" })}` : ""}
+            {toolbox.child_age_label ? ` · ${toolbox.child_age_label}` : ""}
+          </div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontFamily: font.display, fontSize: 18, color: C.terracotta }}>Signs for Sleep</div>
+          <div style={{ fontSize: 11, color: C.mid, letterSpacing: "0.05em", textTransform: "uppercase" }}>Gentle Sleep Consultant</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ToolboxTileView({ tile }) {
+  return (
+    <div style={{ background: C.blueDark, borderRadius: 14, padding: "18px 20px", color: C.white, pageBreakInside: "avoid" }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
+        Your Situation
+      </div>
+      <div style={{ fontStyle: "italic", fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>{tile.situation}</div>
+      <div style={{ borderTop: "1px solid rgba(255,255,255,0.2)", paddingTop: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
+          Strategy
+        </div>
+        <div style={{ fontFamily: font.display, fontSize: 17, marginBottom: 6 }}>{tile.strategy_title}</div>
+        <div style={{ fontSize: 13, lineHeight: 1.6, color: "rgba(255,255,255,0.9)" }}>{tile.strategy_description}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── MAIN COMPONENT (handles both coach editor and client read-only view) ───
+function KnowledgeToolbox({ clientId, clientData, isCoach }) {
+  const [toolbox, setToolbox] = useState(null);
+  const [tiles, setTiles] = useState([]);
+  const [library, setLibrary] = useState([]);
+  const [childDob, setChildDob] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState(false);
+  const [showLibraryManager, setShowLibraryManager] = useState(false);
+  const saveTimer = useRef(null);
+
+  const loadLibrary = useCallback(async () => {
+    const { data } = await supabase.from("strategy_library").select("*").order("sort_order", { ascending: true });
+    setLibrary(data || []);
+  }, []);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      const { data: intakeData } = await supabase.from("intake_responses")
+        .select("child_dob").eq("client_id", clientId).maybeSingle();
+      if (intakeData?.child_dob) setChildDob(intakeData.child_dob);
+
+      const { data: tb } = await supabase.from("knowledge_toolboxes")
+        .select("*").eq("client_id", clientId).maybeSingle();
+
+      if (tb) {
+        setToolbox(tb);
+        setTiles(tb.tiles && tb.tiles.length ? tb.tiles : [emptyTile()]);
+      } else if (isCoach) {
+        setToolbox({
+          client_id: clientId,
+          title: clientData?.name || "",
+          prepared_date: today(),
+          child_age_label: "",
+          summary_text: "",
+          shared: false,
+        });
+        setTiles([emptyTile()]);
+      }
+      await loadLibrary();
+      setLoading(false);
+    };
+    load();
+  }, [clientId, isCoach, loadLibrary]);
+
+  const saveToolbox = async (updatedToolbox, updatedTiles, opts = {}) => {
+    setSaving(true);
+    const payload = {
+      client_id: clientId,
+      title: updatedToolbox.title || null,
+      prepared_date: updatedToolbox.prepared_date || null,
+      child_age_label: updatedToolbox.child_age_label || null,
+      summary_text: updatedToolbox.summary_text || null,
+      tiles: updatedTiles,
+      updated_at: new Date().toISOString(),
+    };
+    if (opts.share !== undefined) {
+      payload.shared = opts.share;
+      if (opts.share) payload.shared_at = new Date().toISOString();
+    }
+
+    let saved;
+    if (updatedToolbox?.id) {
+      ({ data: saved } = await supabase.from("knowledge_toolboxes")
+        .update(payload).eq("id", updatedToolbox.id).select("*").maybeSingle());
+    } else {
+      ({ data: saved } = await supabase.from("knowledge_toolboxes")
+        .insert(payload).select("*").maybeSingle());
+    }
+    if (saved) setToolbox(saved);
+    setSaving(false);
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 2000);
+  };
+
+  const scheduleSave = (nextToolbox, nextTiles) => {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => saveToolbox(nextToolbox, nextTiles), 1000);
+  };
+
+  const updateHeaderField = (field, value) => {
+    const next = { ...toolbox, [field]: value };
+    setToolbox(next);
+    scheduleSave(next, tiles);
+  };
+
+  const updateTile = (idx, field, value) => {
+    const next = tiles.map((t, i) => i === idx ? { ...t, [field]: value } : t);
+    setTiles(next);
+    scheduleSave(toolbox, next);
+  };
+
+  const selectStrategy = (idx, strategyId) => {
+    const strat = library.find((s) => s.id === strategyId);
+    const next = tiles.map((t, i) => i === idx ? {
+      ...t,
+      strategy_id: strategyId,
+      strategy_title: strat ? strat.title : "",
+      strategy_description: strat ? strat.description : "",
+    } : t);
+    setTiles(next);
+    scheduleSave(toolbox, next);
+  };
+
+  const addTile = () => {
+    const next = [...tiles, emptyTile()];
+    setTiles(next);
+    scheduleSave(toolbox, next);
+  };
+
+  const removeTile = (idx) => {
+    const next = tiles.filter((_, i) => i !== idx);
+    setTiles(next);
+    scheduleSave(toolbox, next);
+  };
+
+  const share = async () => { await saveToolbox(toolbox, tiles, { share: true }); };
+  const unshare = async () => { await saveToolbox(toolbox, tiles, { share: false }); };
+  const printToolbox = () => window.print();
+
+  // Auto-fill age label from the intake DOB once, if the coach hasn't set one
+  useEffect(() => {
+    if (isCoach && toolbox && childDob && !toolbox.child_age_label) {
+      const age = ageFromDOB(childDob, toolbox.prepared_date);
+      if (age) updateHeaderField("child_age_label", age);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [childDob, toolbox?.prepared_date]);
+
+  if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading knowledge toolbox…</p>;
+
+  // ── CLIENT VIEW ────────────────────────────────────────────────────────
+  if (!isCoach) {
+    if (!toolbox || !toolbox.shared) return (
+      <div style={{ ...gStyle.card, textAlign: "center", padding: 48, color: C.muted }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>🧰</div>
+        <p style={{ fontSize: 16, marginBottom: 8 }}>Your Knowledge Toolbox isn't ready yet.</p>
+        <p style={{ fontSize: 13 }}>Your consultant will share it with you as your program wraps up.</p>
+      </div>
+    );
+
+    const filledTiles = tiles.filter((t) => t.strategy_title);
+
+    return (
+      <div>
+        <ToolboxHeader toolbox={toolbox} />
+        <div className="no-print" style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+          <button style={gStyle.btnGold} onClick={printToolbox}>🖨 Print / Save PDF</button>
+        </div>
+        {toolbox.summary_text && (
+          <div style={{
+            background: C.terracotta, color: C.white, borderRadius: 14,
+            padding: "20px 24px", marginBottom: 24, lineHeight: 1.7, fontSize: 14,
+          }}>
+            {toolbox.summary_text}
+          </div>
+        )}
+        {filledTiles.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            {filledTiles.map((t, i) => <ToolboxTileView key={t.id || i} tile={t} />)}
+          </div>
+        )}
+        <style>{`
+          @media print {
+            .no-print { display: none !important; }
+            body { background: white !important; }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  // ── COACH VIEW ─────────────────────────────────────────────────────────
+  return (
+    <div>
+      <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ fontFamily: font.display, fontSize: 22, color: C.terracotta, margin: 0 }}>Knowledge Toolbox</h2>
+          <p style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
+            {saving ? "Saving…" : savedMsg ? "✓ Saved" : "Auto-saves as you type"}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button style={gStyle.btnSecondary} onClick={() => setShowLibraryManager((v) => !v)}>
+            📚 Strategy Library
+          </button>
+          <button style={gStyle.btnGold} onClick={printToolbox}>🖨 Print / PDF</button>
+          {toolbox?.shared ? (
+            <button style={gStyle.btnDanger} onClick={unshare}>Unshare from client</button>
+          ) : (
+            <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={share}>Share with client</button>
+          )}
+        </div>
+      </div>
+
+      {toolbox?.shared && (
+        <div className="no-print" style={{
+          background: C.successLight, borderRadius: 10, padding: "10px 16px",
+          marginBottom: 20, fontSize: 13, color: C.success, display: "flex", justifyContent: "space-between",
+        }}>
+          <span>✓ Visible to client</span>
+          <span style={{ color: C.muted }}>
+            Shared {toolbox.shared_at ? new Date(toolbox.shared_at).toLocaleDateString("en-AU") : ""}
+          </span>
+        </div>
+      )}
+
+      {showLibraryManager && (
+        <StrategyLibraryManager library={library} onRefresh={loadLibrary} onClose={() => setShowLibraryManager(false)} />
+      )}
+
+      {/* Editable header fields */}
+      <div style={{ ...gStyle.card, marginBottom: 16 }} className="no-print">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          <div>
+            <label style={gStyle.label}>Title (e.g. child & sibling names)</label>
+            <input style={gStyle.input} value={toolbox.title || ""} onChange={(e) => updateHeaderField("title", e.target.value)} />
+          </div>
+          <div>
+            <label style={gStyle.label}>Prepared date</label>
+            <input type="date" style={gStyle.input} value={toolbox.prepared_date || today()} onChange={(e) => updateHeaderField("prepared_date", e.target.value)} />
+          </div>
+          <div>
+            <label style={gStyle.label}>Age label</label>
+            <input style={gStyle.input} value={toolbox.child_age_label || ""} placeholder="e.g. 20 months"
+              onChange={(e) => updateHeaderField("child_age_label", e.target.value)} />
+          </div>
+        </div>
+      </div>
+
+      <ToolboxHeader toolbox={toolbox} />
+
+      {/* Progress summary */}
+      <div style={{ marginBottom: 20 }} className="no-print">
+        <label style={gStyle.label}>Progress summary</label>
+        <textarea
+          style={{
+            ...gStyle.input, minHeight: 100, resize: "vertical", lineHeight: 1.7,
+            background: C.terracotta, color: C.white, border: "none", borderRadius: 14, padding: "18px 20px",
+          }}
+          placeholder="When we started, [child] was… Over our [x] weeks together we…"
+          value={toolbox.summary_text || ""}
+          onChange={(e) => updateHeaderField("summary_text", e.target.value)}
+        />
+      </div>
+
+      {/* Tiles */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }} className="no-print">
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: 0, fontSize: 16 }}>Your Strategy Toolkit</h3>
+        <button style={{ ...gStyle.btnSecondary, padding: "6px 14px", fontSize: 12 }} onClick={addTile}>+ Add tile</button>
+      </div>
+
+      <div className="no-print" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+        {tiles.map((t, idx) => (
+          <div key={t.id || idx} style={{ background: C.blueDark, borderRadius: 14, padding: "18px 20px", color: C.white }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Your Situation
+              </span>
+              {tiles.length > 1 && (
+                <button onClick={() => removeTile(idx)} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: 16 }}>×</button>
+              )}
+            </div>
+            <textarea
+              style={{
+                width: "100%", minHeight: 50, resize: "vertical", marginBottom: 14,
+                background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8,
+                color: C.white, fontFamily: font.body, fontStyle: "italic", fontSize: 13,
+                padding: "8px 10px", outline: "none", boxSizing: "border-box",
+              }}
+              placeholder="Describe the client's particular struggle…"
+              value={t.situation}
+              onChange={(e) => updateTile(idx, "situation", e.target.value)}
+            />
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.2)", paddingTop: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 6 }}>
+                Strategy
+              </label>
+              <select
+                style={{
+                  width: "100%", padding: "8px 10px", borderRadius: 8, border: "none",
+                  fontFamily: font.body, fontSize: 13, marginBottom: 10, cursor: "pointer",
+                  background: "rgba(255,255,255,0.9)", color: C.dark,
+                }}
+                value={t.strategy_id || ""}
+                onChange={(e) => selectStrategy(idx, e.target.value)}
+              >
+                <option value="">Select a strategy…</option>
+                {library.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
+              </select>
+              {t.strategy_title && (
+                <>
+                  <div style={{ fontFamily: font.display, fontSize: 17, marginBottom: 6 }}>{t.strategy_title}</div>
+                  <div style={{ fontSize: 13, lineHeight: 1.6, color: "rgba(255,255,255,0.9)" }}>{t.strategy_description}</div>
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Print-only version — mirrors client view exactly */}
+      <div className="print-only" style={{ display: "none" }}>
+        <ToolboxHeader toolbox={toolbox} />
+        {toolbox.summary_text && (
+          <div style={{ background: C.terracotta, color: C.white, borderRadius: 14, padding: "20px 24px", marginBottom: 24, lineHeight: 1.7, fontSize: 14 }}>
+            {toolbox.summary_text}
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          {tiles.filter((t) => t.strategy_title).map((t, i) => <ToolboxTileView key={t.id || i} tile={t} />)}
+        </div>
+      </div>
+
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          .print-only { display: block !important; }
+          body { background: white !important; }
+          button { display: none !important; }
         }
       `}</style>
     </div>
