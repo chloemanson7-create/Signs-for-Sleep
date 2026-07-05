@@ -1065,15 +1065,15 @@ function ClientDetail({ client, onBack, onRefresh }) {
 
   return (
     <>
-      <button onClick={onBack} style={{ ...gStyle.btnSecondary, marginBottom: 20 }}>← All Clients</button>
+      <button onClick={onBack} className="no-print" style={{ ...gStyle.btnSecondary, marginBottom: 20 }}>← All Clients</button>
 
-      <div style={{ marginBottom: 24 }}>
+      <div className="no-print" style={{ marginBottom: 24 }}>
         <h1 style={{ fontFamily: font.display, fontSize: 26, color: C.terracotta, margin: "0 0 4px" }}>{clientData.name}</h1>
         <span style={{ fontSize: 13, color: C.muted }}>Code: <strong>{clientData.access_code}</strong></span>
       </div>
 
       {/* Tabs */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 24, overflowX: "auto", paddingBottom: 4 }}>
+      <div className="no-print" style={{ display: "flex", gap: 4, marginBottom: 24, overflowX: "auto", paddingBottom: 4 }}>
         {tabs.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             padding: "8px 16px", borderRadius: 8, border: "none", cursor: "pointer",
@@ -3109,6 +3109,40 @@ function ageFromDOB(dobStr, atDate) {
   return remMonths === 0 ? `${years} year${years !== 1 ? "s" : ""} old` : `${years}y ${remMonths}m`;
 }
 
+// Print stylesheet shared by both the coach and client toolbox views.
+// - Forces background colours to print (browsers strip them by default)
+// - Sets a sensible page size/margin
+// - Trims font sizes/padding slightly so more fits per printed page
+const TOOLBOX_PRINT_CSS = `
+  @media print {
+    .no-print { display: none !important; }
+    .print-only { display: block !important; }
+    body { background: white !important; }
+    button { display: none !important; }
+
+    @page { size: A4; margin: 12mm; }
+
+    /* Force background colours + text colours to actually print */
+    .tb-summary, .tb-tile, .tb-summary *, .tb-tile * {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      color-adjust: exact !important;
+    }
+
+    /* Tighten sizing so everything fits the page more comfortably */
+    .tb-header { margin-bottom: 14px !important; padding-bottom: 10px !important; }
+    .tb-title { font-size: 20px !important; }
+    .tb-meta, .tb-eyebrow { font-size: 10px !important; }
+    .tb-brand { font-size: 15px !important; }
+    .tb-summary { padding: 12px 16px !important; margin-bottom: 14px !important; font-size: 11.5px !important; line-height: 1.5 !important; }
+    .tb-tiles-grid { gap: 10px !important; }
+    .tb-tile { padding: 12px 14px !important; border-radius: 10px !important; }
+    .tb-situation { font-size: 10.5px !important; margin-bottom: 8px !important; }
+    .tb-strategy-title { font-size: 14px !important; margin-bottom: 4px !important; }
+    .tb-strategy-desc { font-size: 10.5px !important; line-height: 1.45 !important; }
+  }
+`;
+
 // ── STRATEGY LIBRARY MANAGER (coach only) ───────────────────────────────────
 // Lets Chloé add/edit/delete strategies without touching code.
 function StrategyLibraryManager({ library, onRefresh, onClose }) {
@@ -3193,22 +3227,22 @@ function StrategyLibraryManager({ library, onRefresh, onClose }) {
 // ── SHARED HEADER (used by both coach + client + print views) ──────────────
 function ToolboxHeader({ toolbox }) {
   return (
-    <div style={{ marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${C.gold}` }}>
+    <div className="tb-header" style={{ marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${C.gold}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>
+          <div className="tb-eyebrow" style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>
             Knowledge Toolbox
           </div>
-          <div style={{ fontFamily: font.display, fontSize: 28, color: C.dark }}>{toolbox.title || "—"}</div>
-          <div style={{ fontSize: 13, color: C.mid, marginTop: 4 }}>
+          <div className="tb-title" style={{ fontFamily: font.display, fontSize: 28, color: C.dark }}>{toolbox.title || "—"}</div>
+          <div className="tb-meta" style={{ fontSize: 13, color: C.mid, marginTop: 4 }}>
             Prepared by Chloé
             {toolbox.prepared_date ? ` · ${new Date(toolbox.prepared_date + "T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" })}` : ""}
             {toolbox.child_age_label ? ` · ${toolbox.child_age_label}` : ""}
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontFamily: font.display, fontSize: 18, color: C.terracotta }}>Signs for Sleep</div>
-          <div style={{ fontSize: 11, color: C.mid, letterSpacing: "0.05em", textTransform: "uppercase" }}>Gentle Sleep Consultant</div>
+          <div className="tb-brand" style={{ fontFamily: font.display, fontSize: 18, color: C.terracotta }}>Signs for Sleep</div>
+          <div className="tb-eyebrow" style={{ fontSize: 11, color: C.mid, letterSpacing: "0.05em", textTransform: "uppercase" }}>Gentle Sleep Consultant</div>
         </div>
       </div>
     </div>
@@ -3217,17 +3251,17 @@ function ToolboxHeader({ toolbox }) {
 
 function ToolboxTileView({ tile }) {
   return (
-    <div style={{ background: C.blueDark, borderRadius: 14, padding: "18px 20px", color: C.white, pageBreakInside: "avoid" }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
+    <div className="tb-tile" style={{ background: C.blueDark, borderRadius: 14, padding: "18px 20px", color: C.white, pageBreakInside: "avoid" }}>
+      <div className="tb-eyebrow" style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
         Your Situation
       </div>
-      <div style={{ fontStyle: "italic", fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>{tile.situation}</div>
+      <div className="tb-situation" style={{ fontStyle: "italic", fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>{tile.situation}</div>
       <div style={{ borderTop: "1px solid rgba(255,255,255,0.2)", paddingTop: 12 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
+        <div className="tb-eyebrow" style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
           Strategy
         </div>
-        <div style={{ fontFamily: font.display, fontSize: 17, marginBottom: 6 }}>{tile.strategy_title}</div>
-        <div style={{ fontSize: 13, lineHeight: 1.6, color: "rgba(255,255,255,0.9)" }}>{tile.strategy_description}</div>
+        <div className="tb-strategy-title" style={{ fontFamily: font.display, fontSize: 17, marginBottom: 6 }}>{tile.strategy_title}</div>
+        <div className="tb-strategy-desc" style={{ fontSize: 13, lineHeight: 1.6, color: "rgba(255,255,255,0.9)" }}>{tile.strategy_description}</div>
       </div>
     </div>
   );
@@ -3254,7 +3288,7 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
     const load = async () => {
       setLoading(true);
       const { data: intakeData } = await supabase.from("intake_responses")
-        .select("child_dob").eq("client_id", clientId).maybeSingle();
+        .select("child_dob, child_name").eq("client_id", clientId).maybeSingle();
       if (intakeData?.child_dob) setChildDob(intakeData.child_dob);
 
       const { data: tb } = await supabase.from("knowledge_toolboxes")
@@ -3264,9 +3298,11 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
         setToolbox(tb);
         setTiles(tb.tiles && tb.tiles.length ? tb.tiles : [emptyTile()]);
       } else if (isCoach) {
+        // Default the title to the child's name from intake (falls back to the
+        // client account name if intake hasn't been filled in yet). Fully editable.
         setToolbox({
           client_id: clientId,
-          title: clientData?.name || "",
+          title: intakeData?.child_name || clientData?.name || "",
           prepared_date: today(),
           child_age_label: "",
           summary_text: "",
@@ -3385,7 +3421,7 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
           <button style={gStyle.btnGold} onClick={printToolbox}>🖨 Print / Save PDF</button>
         </div>
         {toolbox.summary_text && (
-          <div style={{
+          <div className="tb-summary" style={{
             background: C.terracotta, color: C.white, borderRadius: 14,
             padding: "20px 24px", marginBottom: 24, lineHeight: 1.7, fontSize: 14,
           }}>
@@ -3393,16 +3429,11 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
           </div>
         )}
         {filledTiles.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div className="tb-tiles-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             {filledTiles.map((t, i) => <ToolboxTileView key={t.id || i} tile={t} />)}
           </div>
         )}
-        <style>{`
-          @media print {
-            .no-print { display: none !important; }
-            body { background: white !important; }
-          }
-        `}</style>
+        <style>{TOOLBOX_PRINT_CSS}</style>
       </div>
     );
   }
@@ -3536,27 +3567,21 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
         ))}
       </div>
 
-      {/* Print-only version — mirrors client view exactly */}
+      {/* Print-only version — the live ToolboxHeader above already prints fine on
+          its own, so this only needs to add the read-only summary + filled tiles
+          (the editable textareas/selects above are hidden via .no-print). */}
       <div className="print-only" style={{ display: "none" }}>
-        <ToolboxHeader toolbox={toolbox} />
         {toolbox.summary_text && (
-          <div style={{ background: C.terracotta, color: C.white, borderRadius: 14, padding: "20px 24px", marginBottom: 24, lineHeight: 1.7, fontSize: 14 }}>
+          <div className="tb-summary" style={{ background: C.terracotta, color: C.white, borderRadius: 14, padding: "20px 24px", marginBottom: 24, lineHeight: 1.7, fontSize: 14 }}>
             {toolbox.summary_text}
           </div>
         )}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div className="tb-tiles-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           {tiles.filter((t) => t.strategy_title).map((t, i) => <ToolboxTileView key={t.id || i} tile={t} />)}
         </div>
       </div>
 
-      <style>{`
-        @media print {
-          .no-print { display: none !important; }
-          .print-only { display: block !important; }
-          body { background: white !important; }
-          button { display: none !important; }
-        }
-      `}</style>
+      <style>{TOOLBOX_PRINT_CSS}</style>
     </div>
   );
 }
