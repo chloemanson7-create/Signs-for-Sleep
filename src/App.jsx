@@ -3273,6 +3273,7 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
   const [tiles, setTiles] = useState([]);
   const [library, setLibrary] = useState([]);
   const [childDob, setChildDob] = useState(null);
+  const [childName, setChildName] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
@@ -3290,6 +3291,7 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
       const { data: intakeData } = await supabase.from("intake_responses")
         .select("child_dob, child_name").eq("client_id", clientId).maybeSingle();
       if (intakeData?.child_dob) setChildDob(intakeData.child_dob);
+      if (intakeData?.child_name) setChildName(intakeData.child_name);
 
       const { data: tb } = await supabase.from("knowledge_toolboxes")
         .select("*").eq("client_id", clientId).maybeSingle();
@@ -3483,6 +3485,18 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
           <div>
             <label style={gStyle.label}>Title (e.g. child & sibling names)</label>
             <input style={gStyle.input} value={toolbox.title || ""} onChange={(e) => updateHeaderField("title", e.target.value)} />
+            {childName && toolbox.title !== childName && (
+              <button
+                onClick={() => updateHeaderField("title", childName)}
+                style={{
+                  background: "none", border: "none", padding: 0, marginTop: 5,
+                  fontFamily: font.body, fontSize: 11, color: C.terracotta,
+                  cursor: "pointer", textDecoration: "underline",
+                }}
+              >
+                Use "{childName}" from intake
+              </button>
+            )}
           </div>
           <div>
             <label style={gStyle.label}>Prepared date</label>
