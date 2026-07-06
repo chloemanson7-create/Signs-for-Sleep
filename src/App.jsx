@@ -3251,11 +3251,17 @@ function ageFromDOB(dobStr, atDate) {
   return remMonths === 0 ? `${years} year${years !== 1 ? "s" : ""} old` : `${years}y ${remMonths}m`;
 }
 
-// Print stylesheet shared by both the coach and client toolbox views.
+// Stylesheet shared by both the coach and client toolbox views.
+// - Stacks the strategy tiles to a single column on narrow (mobile) screens,
+//   keeps them side-by-side on desktop
 // - Forces background colours to print (browsers strip them by default)
 // - Sets a sensible page size/margin
 // - Trims font sizes/padding slightly so more fits per printed page
 const TOOLBOX_PRINT_CSS = `
+  @media screen and (max-width: 640px) {
+    .tb-tiles-grid { grid-template-columns: 1fr !important; }
+  }
+
   @media print {
     .no-print { display: none !important; }
     .print-only { display: block !important; }
@@ -3277,7 +3283,7 @@ const TOOLBOX_PRINT_CSS = `
     .tb-meta, .tb-eyebrow { font-size: 10px !important; }
     .tb-brand { font-size: 15px !important; }
     .tb-summary { padding: 12px 16px !important; margin-bottom: 14px !important; font-size: 11.5px !important; line-height: 1.5 !important; }
-    .tb-tiles-grid { gap: 10px !important; }
+    .tb-tiles-grid { gap: 10px !important; grid-template-columns: 1fr 1fr !important; }
     .tb-tile { padding: 12px 14px !important; border-radius: 10px !important; }
     .tb-situation { font-size: 10.5px !important; margin-bottom: 8px !important; }
     .tb-strategy-title { font-size: 14px !important; margin-bottom: 4px !important; }
@@ -3674,7 +3680,7 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
         <button style={{ ...gStyle.btnSecondary, padding: "6px 14px", fontSize: 12 }} onClick={addTile}>+ Add tile</button>
       </div>
 
-      <div className="no-print" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+      <div className="no-print tb-tiles-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
         {tiles.map((t, idx) => (
           <div key={t.id || idx} style={{ background: C.blueDark, borderRadius: 14, padding: "18px 20px", color: C.white }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
