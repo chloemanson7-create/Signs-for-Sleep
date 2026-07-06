@@ -432,6 +432,126 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
   );
 }
 
+// ── DURATION WHEEL PICKER ───────────────────────────────────────────────────
+// Same scroll-wheel style as TimeSelect, but for a length of time rather than
+// a clock time — no AM/PM column. Value is stored/returned as total minutes.
+const WHEEL_DUR_HOURS = Array.from({ length: 10 }, (_, i) => String(i)); // 0–9 hours
+
+function parseMinsToWheel(mins) {
+  if (mins === null || mins === undefined || mins === "") return { h: null, m: null };
+  const total = parseInt(mins);
+  if (isNaN(total)) return { h: null, m: null };
+  return { h: Math.floor(total / 60), m: total % 60 };
+}
+
+function wheelToMins(h, m) {
+  if (h === null || m === null) return null;
+  return parseInt(h) * 60 + parseInt(m);
+}
+
+function DurationSelect({ value, onChange, disabled, placeholder }) {
+  const init = parseMinsToWheel(value);
+  const [h,    setH]    = useState(init.h);
+  const [m,    setM]    = useState(init.m);
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  // Sync when external value changes (loading saved data)
+  useEffect(() => {
+    const p = parseMinsToWheel(value);
+    setH(p.h); setM(p.m);
+  }, [value]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const fn = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", fn);
+    return () => document.removeEventListener("mousedown", fn);
+  }, [open]);
+
+  const handle = (field, val) => {
+    const next = {
+      h: field === "h" ? val : h,
+      m: field === "m" ? val : m,
+    };
+    if (field === "h") setH(val);
+    if (field === "m") setM(val);
+    if (next.h !== null && next.m !== null) {
+      onChange(wheelToMins(next.h, next.m));
+    }
+  };
+
+  const label = h !== null && m !== null
+    ? fmtDuration(wheelToMins(h, m))
+    : placeholder || "Select duration…";
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => !disabled && setOpen(o => !o)}
+        style={{
+          width: "100%", padding: "10px 14px",
+          border: "1px solid rgba(196,113,74,0.18)",
+          borderRadius: 8,
+          fontFamily: "'DM Sans', system-ui, sans-serif",
+          fontSize: 14,
+          background: disabled ? "#FAF7F2" : "#FFFFFF",
+          color: h !== null ? "#2C2420" : "#9E8E88",
+          outline: "none", cursor: disabled ? "default" : "pointer",
+          textAlign: "left", display: "flex",
+          alignItems: "center", justifyContent: "space-between",
+          boxSizing: "border-box",
+        }}
+      >
+        <span>{label}</span>
+        {!disabled && <span style={{ color: "#C9A84C", fontSize: 11 }}>{open ? "▲" : "▼"}</span>}
+      </button>
+
+      {open && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 9999,
+          background: "#FFFFFF",
+          border: "1px solid rgba(196,113,74,0.25)",
+          borderRadius: 14,
+          boxShadow: "0 12px 40px rgba(44,36,32,0.18)",
+          padding: "8px 8px 10px",
+          width: "100%", minWidth: 220,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <WheelColumn
+              items={WHEEL_DUR_HOURS}
+              selected={h !== null ? String(h) : null}
+              onSelect={(v) => handle("h", parseInt(v))}
+            />
+            <div style={{ color: "#9E8E88", fontSize: 13, fontWeight: 700, paddingBottom: 2 }}>hr</div>
+            <WheelColumn
+              items={WHEEL_MINS}
+              selected={m !== null ? String(m).padStart(2,"0") : null}
+              onSelect={(v) => handle("m", parseInt(v))}
+            />
+            <div style={{ color: "#9E8E88", fontSize: 13, fontWeight: 700, paddingBottom: 2 }}>min</div>
+          </div>
+          <button
+            onClick={() => setOpen(false)}
+            style={{
+              marginTop: 8, width: "100%", padding: "9px",
+              border: "none", borderRadius: 8,
+              background: "#C4714A", color: "#FFFFFF",
+              fontSize: 13, fontFamily: "'DM Sans', system-ui, sans-serif",
+              fontWeight: 600, cursor: "pointer",
+            }}
+          >
+            Done
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── INTAKE QUESTIONS ───────────────────────────────────────────────────────
 const PRONOUNS = ["She/her", "They/them", "He/him", "Prefer not to say"];
 
@@ -1570,6 +1690,7 @@ function ClientApp({ session, onLogout }) {
 
   const tabs = [
     { key: "diary", label: "Sleep Diary" },
+    { key: "analysis", label: "📊 Analysis" },
     { key: "intake", label: "Questionnaire" },
     { key: "plan", label: "📋 Sleep Plan" },
     { key: "toolbox", label: "🧰 Toolbox" },
@@ -1643,6 +1764,7 @@ function ClientApp({ session, onLogout }) {
 
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
         {tab === "diary" && <SleepDiaryViewer clientId={session.clientId} isCoach={false} />}
+        {tab === "analysis" && <SleepAnalysis client={{ id: session.clientId, name: session.clientName }} />}
         {tab === "plan" && <SleepPlanEditor clientId={session.clientId} isCoach={false} />}
         {tab === "toolbox" && <KnowledgeToolbox clientId={session.clientId} isCoach={false} />}
         {tab === "intake" && (
@@ -1884,7 +2006,7 @@ const emptyNap = () => ({ start: "", end: "", how_fell_asleep: "", location: "",
 const emptyEntry = () => ({
   wake_time: "", bed_time: "", notes: "",
   routine_start_time: "", into_bed_time: "", asleep_time: "",
-  night_wakings_count: "", night_wakings_notes: "",
+  night_wakings_count: "", night_wakings_notes: "", night_wakings_awake_mins: "",
   daytime_notes: "",
   naps: [emptyNap()],
 });
@@ -1951,7 +2073,9 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       .eq("client_id", clientId).eq("date", nextDateStr).maybeSingle();
 
     const tomorrowWake = nextEntry?.wake_time ? nextEntry.wake_time.slice(0, 5) : null;
-    const nightSleep = calcNightSleep(rest.bed_time, tomorrowWake);
+    const rawNightSleep = calcNightSleep(rest.bed_time, tomorrowWake);
+    const awakeMins = parseInt(rest.night_wakings_awake_mins) || 0;
+    const nightSleep = rawNightSleep !== null ? Math.max(0, rawNightSleep - awakeMins) : null;
     const total24h = totalNapMins + (nightSleep || 0);
 
     // Step 2: Build and save today's payload
@@ -1966,6 +2090,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
       into_bed_time: rest.into_bed_time || null,
       night_wakings_count: rest.night_wakings_count || null,
       night_wakings_notes: rest.night_wakings_notes || null,
+      night_wakings_awake_mins: rest.night_wakings_awake_mins || null,
       daytime_notes: rest.daytime_notes || null,
       total_nap_mins: totalNapMins,
       night_sleep_mins: nightSleep,
@@ -1985,16 +2110,19 @@ function SleepDiaryViewer({ clientId, isCoach }) {
     // Because yesterday's night = yesterday bed → today wake
     const prevDateStr = offsetDate(date, -1);
     const { data: prevEntry } = await supabase
-      .from("sleep_diary").select("id, bed_time, total_nap_mins")
+      .from("sleep_diary").select("id, bed_time, total_nap_mins, night_wakings_awake_mins")
       .eq("client_id", clientId).eq("date", prevDateStr).maybeSingle();
     if (prevEntry?.id && prevEntry.bed_time) {
-      const prevNightSleep = calcNightSleep(prevEntry.bed_time, rest.wake_time);
+      const rawPrevNightSleep = calcNightSleep(prevEntry.bed_time, rest.wake_time);
+      const prevAwakeMins = parseInt(prevEntry.night_wakings_awake_mins) || 0;
+      const prevNightSleep = rawPrevNightSleep !== null ? Math.max(0, rawPrevNightSleep - prevAwakeMins) : null;
       const prevTotal = (prevEntry.total_nap_mins || 0) + (prevNightSleep || 0);
       await supabase.from("sleep_diary").update({
         night_sleep_mins: prevNightSleep,
         total_sleep_24h: prevTotal,
       }).eq("id", prevEntry.id);
     }
+
 
     // Step 4: Update local state so display refreshes immediately
     setEntry(prev => prev ? {
@@ -2280,7 +2408,7 @@ function SleepDiaryViewer({ clientId, isCoach }) {
           <label style={gStyle.label}>Time went to sleep</label>
           <TimeSelect value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginBottom: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 12, marginBottom: 12 }}>
           <div>
             <label style={gStyle.label}>Times woke overnight</label>
             <select style={{ ...gStyle.input, cursor: "pointer" }}
@@ -2292,6 +2420,15 @@ function SleepDiaryViewer({ clientId, isCoach }) {
                 <option key={i} value={i}>{i}</option>
               ))}
             </select>
+          </div>
+          <div>
+            <label style={gStyle.label}>Total time awake overnight</label>
+            <DurationSelect
+              value={entry.night_wakings_awake_mins}
+              onChange={(v) => update("night_wakings_awake_mins", v)}
+              disabled={isCoach}
+              placeholder="Select duration…"
+            />
           </div>
           <div>
             <label style={gStyle.label}>Night waking notes</label>
@@ -2351,8 +2488,13 @@ function SleepAnalysis({ client }) {
 
     // Option B: backward night sleep calc (prev bed → today wake) for analysis accuracy
     const prevEntry = idx > 0 ? entries[idx - 1] : null;
-    const backwardNightMins = prevEntry?.bed_time && e.wake_time
+    const rawBackwardNightMins = prevEntry?.bed_time && e.wake_time
       ? calcNightSleep(prevEntry.bed_time, e.wake_time)
+      : null;
+    // The "awake overnight" duration is logged on the night it belongs to (prevEntry's date)
+    const prevAwakeMins = prevEntry ? (parseInt(prevEntry.night_wakings_awake_mins) || 0) : 0;
+    const backwardNightMins = rawBackwardNightMins !== null
+      ? Math.max(0, rawBackwardNightMins - prevAwakeMins)
       : null;
 
     // Option D: only include total if we have BOTH nap and night data
