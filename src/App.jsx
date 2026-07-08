@@ -3281,7 +3281,7 @@ const TOOLBOX_PRINT_CSS = `
     .tb-header { margin-bottom: 14px !important; padding-bottom: 10px !important; }
     .tb-title { font-size: 20px !important; }
     .tb-meta, .tb-eyebrow { font-size: 10px !important; }
-    .tb-brand { font-size: 15px !important; }
+    .tb-logo { max-width: 110px !important; }
     .tb-summary { padding: 12px 16px !important; margin-bottom: 14px !important; font-size: 11.5px !important; line-height: 1.5 !important; }
     .tb-tiles-grid { gap: 10px !important; grid-template-columns: 1fr 1fr !important; }
     .tb-tile { padding: 12px 14px !important; border-radius: 10px !important; }
@@ -3389,7 +3389,13 @@ function ToolboxHeader({ toolbox }) {
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div className="tb-brand" style={{ fontFamily: font.display, fontSize: 18, color: C.terracotta }}>Signs for Sleep</div>
+          <img
+            src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
+            alt="Signs for Sleep"
+            className="tb-logo"
+            style={{ maxWidth: 150, width: "100%", height: "auto", marginBottom: 4 }}
+            onError={(e) => { e.target.style.display = "none"; }}
+          />
           <div className="tb-eyebrow" style={{ fontSize: 11, color: C.mid, letterSpacing: "0.05em", textTransform: "uppercase" }}>Gentle Sleep Consultant</div>
         </div>
       </div>
