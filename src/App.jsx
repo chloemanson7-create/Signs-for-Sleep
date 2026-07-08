@@ -9,6 +9,13 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = "https://zkesnhhduxtxinjdkbyn.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InprZXNuaGhkdXh0eGluamRrYnluIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY2NDI3OTgsImV4cCI6MjA5MjIxODc5OH0.6yG-4vONpCxi8k_kZm4vIAtUJIV8yxk6PtcKMJKK1Ho";
 const COACH_PASSWORD = "sleep2024"; // Change this via Settings inside the app
+
+// Bump the ?v= number any time you replace the logo file in Supabase Storage.
+// Supabase's CDN caches files by URL, so re-uploading a file with the SAME
+// name won't show up until the URL itself changes — bumping this version
+// number forces browsers/the CDN to fetch the new file instead of a cached
+// copy of the old one.
+const LOGO_URL = "https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png?v=2";
 const DEFAULT_SUPPORT_DAYS = 28;
 const DEFAULT_CONTACT_EVERY = 7;
 
@@ -817,7 +824,7 @@ function LoginScreen({ onLogin }) {
         {/* Logo — doubled in size, equidistant from divider */}
         <div style={{ marginBottom: 32 }}>
           <img
-            src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
+            src={LOGO_URL}
             alt="Signs for Sleep"
             style={{ maxWidth: 680, width: "100%", height: "auto" }}
             onError={(e) => { e.target.style.display = "none"; }}
@@ -3000,11 +3007,8 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
       <div>
         {/* Print header */}
         <div className="print-only" style={{ display: "none", marginBottom: 24, textAlign: "center" }}>
-          <img src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
+          <img src={LOGO_URL}
             alt="Signs for Sleep" style={{ maxWidth: 280, height: "auto" }} />
-          <div style={{ fontSize: 12, color: C.gold, marginTop: 4 }}>
-            Supporting sleep through connection and communication.
-          </div>
           <div style={{ fontFamily: font.display, fontSize: 20, color: C.terracotta, marginTop: 12 }}>
             Sleep Plan{childName ? ` for ${childName}` : ""}
           </div>
@@ -3143,12 +3147,8 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
 
       {/* Print header */}
       <div className="print-only" style={{ display: "none", marginBottom: 24, textAlign: "center" }}>
-        <img src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
+        <img src={LOGO_URL}
           alt="Signs for Sleep" style={{ maxWidth: 280, height: "auto" }} />
-        <div style={{ fontFamily: font.display, fontSize: 11, color: C.gold,
-          letterSpacing: "0.15em", textTransform: "uppercase", marginTop: 4 }}>
-          Supporting sleep through connection and communication.
-        </div>
         <div style={{ fontFamily: font.display, fontSize: 20, color: C.terracotta, marginTop: 12 }}>
           Sleep Plan{childName ? ` for ${childName}` : ""}
         </div>
@@ -3258,11 +3258,12 @@ function ageFromDOB(dobStr, atDate) {
 // - Sets a sensible page size/margin
 // - Trims font sizes/padding slightly so more fits per printed page
 const TOOLBOX_PRINT_CSS = `
-  /* The logo PNG has built-in transparent padding around the artwork, so we
-     pull it up/in with negative margins to sit flush against the header
-     rather than fighting the image file itself. */
-  .tb-logo { max-width: 550px; margin-top: -42px; margin-bottom: -14px; }
-  .tb-tagline { margin-top: -2px; }
+  /* Sized for the current logo (tagline baked into the image, minimal
+     built-in padding). If you swap the logo file again and the sizing looks
+     off, adjust the max-width values below rather than using large negative
+     margins — those were only needed to compensate for the old file's
+     excess transparent padding. */
+  .tb-logo { max-width: 260px; }
 
   @media screen and (max-width: 640px) {
     .tb-tiles-grid { grid-template-columns: 1fr !important; }
@@ -3287,8 +3288,7 @@ const TOOLBOX_PRINT_CSS = `
     .tb-header { margin-bottom: 14px !important; padding-bottom: 10px !important; }
     .tb-title { font-size: 20px !important; }
     .tb-meta, .tb-eyebrow { font-size: 10px !important; }
-    .tb-logo { max-width: 400px !important; margin-top: -30px !important; margin-bottom: -10px !important; }
-    .tb-tagline { font-size: 9px !important; margin-top: -2px !important; }
+    .tb-logo { max-width: 180px !important; }
     .tb-summary { padding: 12px 16px !important; margin-bottom: 14px !important; font-size: 11.5px !important; line-height: 1.5 !important; }
     .tb-tiles-grid { gap: 10px !important; grid-template-columns: 1fr 1fr !important; }
     .tb-tile { padding: 12px 14px !important; border-radius: 10px !important; }
@@ -3397,13 +3397,12 @@ function ToolboxHeader({ toolbox }) {
         </div>
         <div style={{ textAlign: "right" }}>
           <img
-            src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
+            src={LOGO_URL}
             alt="Signs for Sleep"
             className="tb-logo"
             style={{ width: "100%", height: "auto" }}
             onError={(e) => { e.target.style.display = "none"; }}
           />
-          <div className="tb-tagline" style={{ fontSize: 11, color: C.mid }}>Supporting sleep through connection and communication</div>
         </div>
       </div>
     </div>
