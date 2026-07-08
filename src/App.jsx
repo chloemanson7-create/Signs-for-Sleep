@@ -3258,6 +3258,12 @@ function ageFromDOB(dobStr, atDate) {
 // - Sets a sensible page size/margin
 // - Trims font sizes/padding slightly so more fits per printed page
 const TOOLBOX_PRINT_CSS = `
+  /* The logo PNG has built-in transparent padding around the artwork, so we
+     pull it up/in with negative margins to sit flush against the header
+     rather than fighting the image file itself. */
+  .tb-logo { max-width: 550px; margin-top: -42px; margin-bottom: -14px; }
+  .tb-tagline { margin-top: -2px; }
+
   @media screen and (max-width: 640px) {
     .tb-tiles-grid { grid-template-columns: 1fr !important; }
   }
@@ -3281,8 +3287,8 @@ const TOOLBOX_PRINT_CSS = `
     .tb-header { margin-bottom: 14px !important; padding-bottom: 10px !important; }
     .tb-title { font-size: 20px !important; }
     .tb-meta, .tb-eyebrow { font-size: 10px !important; }
-    .tb-logo { max-width: 220px !important; }
-    .tb-tagline { font-size: 9px !important; }
+    .tb-logo { max-width: 400px !important; margin-top: -30px !important; margin-bottom: -10px !important; }
+    .tb-tagline { font-size: 9px !important; margin-top: -2px !important; }
     .tb-summary { padding: 12px 16px !important; margin-bottom: 14px !important; font-size: 11.5px !important; line-height: 1.5 !important; }
     .tb-tiles-grid { gap: 10px !important; grid-template-columns: 1fr 1fr !important; }
     .tb-tile { padding: 12px 14px !important; border-radius: 10px !important; }
@@ -3394,7 +3400,7 @@ function ToolboxHeader({ toolbox }) {
             src="https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/assets/logo.png"
             alt="Signs for Sleep"
             className="tb-logo"
-            style={{ maxWidth: 300, width: "100%", height: "auto", marginBottom: 4 }}
+            style={{ width: "100%", height: "auto" }}
             onError={(e) => { e.target.style.display = "none"; }}
           />
           <div className="tb-tagline" style={{ fontSize: 11, color: C.mid }}>Supporting sleep through connection and communication</div>
