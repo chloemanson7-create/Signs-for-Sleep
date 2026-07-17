@@ -1185,6 +1185,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
     { key: "diary", label: "Sleep Diary" },
     { key: "analysis", label: "📊 Analysis" },
     { key: "plan", label: "📋 Sleep Plan" },
+    { key: "progress", label: "🎉 Progress" },
     { key: "toolbox", label: "🧰 Toolbox" },
     { key: "notes", label: "Notes" },
     { key: "settings", label: "Settings" },
@@ -1218,6 +1219,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
       {tab === "diary" && <SleepDiaryViewer clientId={client.id} isCoach />}
       {tab === "analysis" && <SleepAnalysis client={clientData} />}
       {tab === "plan" && <SleepPlanEditor clientId={client.id} clientData={clientData} isCoach={true} />}
+      {tab === "progress" && <ProgressTab clientId={client.id} clientData={clientData} isCoach={true} />}
       {tab === "toolbox" && <KnowledgeToolbox clientId={client.id} clientData={clientData} isCoach={true} />}
       {tab === "notes" && <CoachNotes clientId={client.id} />}
       {tab === "settings" && <ClientSettings client={clientData} onRefresh={refresh} onDelete={onBack} />}
@@ -1698,6 +1700,7 @@ function ClientApp({ session, onLogout }) {
   const tabs = [
     { key: "diary", label: "Sleep Diary" },
     { key: "analysis", label: "📊 Analysis" },
+    { key: "progress", label: "🎉 Progress" },
     { key: "intake", label: "Questionnaire" },
     { key: "plan", label: "📋 Sleep Plan" },
     { key: "toolbox", label: "🧰 Toolbox" },
@@ -1772,6 +1775,7 @@ function ClientApp({ session, onLogout }) {
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
         {tab === "diary" && <SleepDiaryViewer clientId={session.clientId} isCoach={false} />}
         {tab === "analysis" && <SleepAnalysis client={{ id: session.clientId, name: session.clientName }} />}
+        {tab === "progress" && <ProgressTab clientId={session.clientId} isCoach={false} />}
         {tab === "plan" && <SleepPlanEditor clientId={session.clientId} isCoach={false} />}
         {tab === "toolbox" && <KnowledgeToolbox clientId={session.clientId} isCoach={false} />}
         {tab === "intake" && (
@@ -3756,6 +3760,412 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
       </div>
 
       <style>{TOOLBOX_PRINT_CSS}</style>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROGRESS LOG — quick wins/milestones tracker + shareable recap
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PROGRESS_TAGS = [
+  { key: "win",         label: "Win",         emoji: "🎉", color: C.terracotta, bg: C.terracottaLight },
+  { key: "milestone",   label: "Milestone",   emoji: "⭐", color: C.gold,       bg: C.goldLight },
+  { key: "rough_patch", label: "Rough patch", emoji: "🌙", color: C.blueDark,   bg: C.blueLight },
+  { key: "note",        label: "Note",        emoji: "📝", color: C.mid,        bg: "#F0EDE9" },
+];
+
+const PROGRESS_PRINT_CSS = `
+  @media print {
+    .no-print { display: none !important; }
+    .print-only { display: block !important; }
+    body { background: white !important; }
+    button { display: none !important; }
+    @page { size: A4; margin: 12mm; }
+    .pr-intro, .pr-intro * {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      color-adjust: exact !important;
+    }
+  }
+`;
+
+// Top-level tab: toggles between the working Timeline and the shareable Recap
+function ProgressTab({ clientId, clientData, isCoach }) {
+  const [view, setView] = useState("timeline"); // timeline | recap
+
+  return (
+    <div>
+      <div className="no-print" style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        {[
+          { key: "timeline", label: "Timeline" },
+          { key: "recap", label: "✨ Recap" },
+        ].map((v) => (
+          <button key={v.key} onClick={() => setView(v.key)} style={{
+            padding: "8px 18px", borderRadius: 20, border: "none", cursor: "pointer",
+            fontFamily: font.body, fontSize: 13, fontWeight: 600,
+            background: view === v.key ? C.terracotta : C.terracottaLight,
+            color: view === v.key ? C.white : C.terracottaDark,
+          }}>
+            {v.label}
+          </button>
+        ))}
+      </div>
+      {view === "timeline"
+        ? <ProgressTimeline clientId={clientId} clientData={clientData} isCoach={isCoach} />
+        : <ProgressRecap clientId={clientId} isCoach={isCoach} />}
+    </div>
+  );
+}
+
+// ── TIMELINE — the working log, both coach and client can add to it ────────
+function ProgressTimeline({ clientId, clientData, isCoach }) {
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedTag, setSelectedTag] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const loadEntries = useCallback(async () => {
+    const { data } = await supabase.from("progress_entries")
+      .select("*").eq("client_id", clientId)
+      .order("created_at", { ascending: false });
+    setEntries(data || []);
+    setLoading(false);
+  }, [clientId]);
+
+  useEffect(() => { loadEntries(); }, [loadEntries]);
+
+  const addEntry = async () => {
+    if (!selectedTag) return;
+    setSaving(true);
+    await supabase.from("progress_entries").insert({
+      client_id: clientId,
+      author: isCoach ? "coach" : "client",
+      tag: selectedTag,
+      note: note.trim() || null,
+    });
+    setSelectedTag("");
+    setNote("");
+    setSaving(false);
+    loadEntries();
+  };
+
+  const deleteEntry = async (entry) => {
+    await supabase.from("progress_entries").delete().eq("id", entry.id);
+    loadEntries();
+  };
+
+  // Coach sees "You" for their own entries and the client's name for the client's;
+  // client sees "You" for their own and "Chloé" for the coach's.
+  const authorLabel = (entry) => {
+    if (isCoach) return entry.author === "coach" ? "You" : (clientData?.name || "Client");
+    return entry.author === "client" ? "You" : "Chloé";
+  };
+
+  // Coach can clear anything; client can only remove their own entries.
+  const canDelete = (entry) => (isCoach ? true : entry.author === "client");
+
+  return (
+    <div>
+      {/* Quick add */}
+      <div style={gStyle.card}>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 14px" }}>Log something</h3>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {PROGRESS_TAGS.map((t) => (
+            <button key={t.key} onClick={() => setSelectedTag(t.key)} style={{
+              padding: "8px 16px", borderRadius: 20, border: "none", cursor: "pointer",
+              fontFamily: font.body, fontSize: 13, fontWeight: 600,
+              background: selectedTag === t.key ? t.color : t.bg,
+              color: selectedTag === t.key ? C.white : t.color,
+            }}>
+              {t.emoji} {t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            style={{ ...gStyle.input, flex: 1 }}
+            placeholder="Add a quick note (optional)…"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addEntry()}
+          />
+          <button
+            style={{ ...gStyle.btnPrimary, width: "auto" }}
+            onClick={addEntry}
+            disabled={!selectedTag || saving}
+          >
+            {saving ? "Adding…" : "+ Add"}
+          </button>
+        </div>
+        {!selectedTag && (
+          <p style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Pick a tag above to add an entry.</p>
+        )}
+      </div>
+
+      {/* Timeline */}
+      {loading ? (
+        <p style={{ color: C.muted, padding: 40 }}>Loading…</p>
+      ) : entries.length === 0 ? (
+        <div style={{ ...gStyle.card, textAlign: "center", padding: 40, color: C.muted }}>
+          Nothing logged yet — tap a tag above to add the first entry.
+        </div>
+      ) : (
+        entries.map((entry) => {
+          const tagConfig = PROGRESS_TAGS.find((t) => t.key === entry.tag) || PROGRESS_TAGS[3];
+          return (
+            <div key={entry.id} style={{
+              ...gStyle.card, borderLeft: `4px solid ${tagConfig.color}`,
+              display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12,
+            }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                  <span style={gStyle.tag(tagConfig.color, tagConfig.bg)}>{tagConfig.emoji} {tagConfig.label}</span>
+                  <span style={{ fontSize: 11, color: C.muted }}>
+                    {authorLabel(entry)} · {new Date(entry.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+                  </span>
+                </div>
+                {entry.note && <div style={{ fontSize: 14, color: C.dark }}>{entry.note}</div>}
+              </div>
+              {canDelete(entry) && (
+                <button onClick={() => deleteEntry(entry)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16 }}>×</button>
+              )}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+// ── RECAP — auto-compiled from Win/Milestone entries, shareable like the Sleep Plan/Toolbox ──
+function ProgressRecap({ clientId, isCoach }) {
+  const [recap, setRecap] = useState(null);
+  const [entries, setEntries] = useState([]);
+  const [childName, setChildName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState(false);
+  const saveTimer = useRef(null);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      const { data: intakeData } = await supabase.from("intake_responses")
+        .select("child_name").eq("client_id", clientId).maybeSingle();
+      if (intakeData?.child_name) setChildName(intakeData.child_name);
+
+      const { data: rc } = await supabase.from("progress_recaps")
+        .select("*").eq("client_id", clientId).maybeSingle();
+      if (rc) {
+        setRecap(rc);
+      } else if (isCoach) {
+        setRecap({ client_id: clientId, intro_text: "", shared: false });
+      }
+
+      const { data: entryData } = await supabase.from("progress_entries")
+        .select("*").eq("client_id", clientId)
+        .in("tag", ["win", "milestone"])
+        .order("created_at", { ascending: true });
+      setEntries(entryData || []);
+      setLoading(false);
+    };
+    load();
+  }, [clientId, isCoach]);
+
+  const saveRecap = async (updated, opts = {}) => {
+    setSaving(true);
+    const payload = {
+      client_id: clientId,
+      intro_text: updated.intro_text || null,
+      updated_at: new Date().toISOString(),
+    };
+    if (opts.share !== undefined) {
+      payload.shared = opts.share;
+      if (opts.share) payload.shared_at = new Date().toISOString();
+    }
+    let saved;
+    if (updated?.id) {
+      ({ data: saved } = await supabase.from("progress_recaps")
+        .update(payload).eq("id", updated.id).select("*").maybeSingle());
+    } else {
+      ({ data: saved } = await supabase.from("progress_recaps")
+        .insert(payload).select("*").maybeSingle());
+    }
+    if (saved) setRecap(saved);
+    setSaving(false);
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 2000);
+  };
+
+  const updateIntro = (value) => {
+    const next = { ...recap, intro_text: value };
+    setRecap(next);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => saveRecap(next), 1000);
+  };
+
+  const share = () => saveRecap(recap, { share: true });
+  const unshare = async () => {
+    await supabase.from("progress_recaps").update({ shared: false }).eq("id", recap.id);
+    setRecap((prev) => ({ ...prev, shared: false }));
+  };
+
+  const printRecap = () => window.print();
+
+  if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading recap…</p>;
+
+  const winCount = entries.filter((e) => e.tag === "win").length;
+  const milestoneCount = entries.filter((e) => e.tag === "milestone").length;
+  const spanLabel = (() => {
+    if (entries.length < 2) return null;
+    const first = new Date(entries[0].created_at);
+    const last = new Date(entries[entries.length - 1].created_at);
+    const days = Math.max(1, Math.round((last - first) / 86400000));
+    return days < 14 ? `${days} days` : `${Math.round(days / 7)} weeks`;
+  })();
+
+  // ── CLIENT VIEW ──
+  if (!isCoach) {
+    if (!recap || !recap.shared) return (
+      <div style={{ ...gStyle.card, textAlign: "center", padding: 48, color: C.muted }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>✨</div>
+        <p style={{ fontSize: 16, marginBottom: 8 }}>Your progress recap isn't ready yet.</p>
+        <p style={{ fontSize: 13 }}>Your consultant will share it with you when it's time.</p>
+      </div>
+    );
+
+    return (
+      <div>
+        <RecapHeader childName={childName} winCount={winCount} milestoneCount={milestoneCount} spanLabel={spanLabel} />
+        <div className="no-print" style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+          <button style={gStyle.btnGold} onClick={printRecap}>🖨 Print / Save PDF</button>
+        </div>
+        {recap.intro_text && (
+          <div className="pr-intro" style={{ background: C.terracotta, color: C.white, borderRadius: 14, padding: "20px 24px", marginBottom: 24, lineHeight: 1.7, fontSize: 14 }}>
+            {recap.intro_text}
+          </div>
+        )}
+        <RecapEntryList entries={entries} />
+        <style>{PROGRESS_PRINT_CSS}</style>
+      </div>
+    );
+  }
+
+  // ── COACH VIEW ──
+  return (
+    <div>
+      <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ fontFamily: font.display, fontSize: 22, color: C.terracotta, margin: 0 }}>Progress Recap</h2>
+          <p style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
+            {saving ? "Saving…" : savedMsg ? "✓ Saved" : "Auto-saves as you type"}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button style={gStyle.btnGold} onClick={printRecap}>🖨 Print / PDF</button>
+          {recap?.shared ? (
+            <button style={gStyle.btnDanger} onClick={unshare}>Unshare from client</button>
+          ) : (
+            <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={share}>Share with client</button>
+          )}
+        </div>
+      </div>
+
+      {recap?.shared && (
+        <div className="no-print" style={{
+          background: C.successLight, borderRadius: 10, padding: "10px 16px",
+          marginBottom: 20, fontSize: 13, color: C.success, display: "flex", justifyContent: "space-between",
+        }}>
+          <span>✓ Visible to client</span>
+          <span style={{ color: C.muted }}>
+            Shared {recap.shared_at ? new Date(recap.shared_at).toLocaleDateString("en-AU") : ""}
+          </span>
+        </div>
+      )}
+
+      <RecapHeader childName={childName} winCount={winCount} milestoneCount={milestoneCount} spanLabel={spanLabel} />
+
+      <div className="no-print" style={{ marginBottom: 20 }}>
+        <label style={gStyle.label}>Intro message</label>
+        <textarea
+          style={{
+            ...gStyle.input, minHeight: 90, resize: "vertical", lineHeight: 1.7,
+            background: C.terracotta, color: C.white, border: "none", borderRadius: 14, padding: "18px 20px",
+          }}
+          placeholder="Look how far you've come — here's every win captured along the way…"
+          value={recap.intro_text || ""}
+          onChange={(e) => updateIntro(e.target.value)}
+        />
+      </div>
+
+      {entries.length === 0 ? (
+        <div style={{ ...gStyle.card, textAlign: "center", padding: 40, color: C.muted }}>
+          No wins or milestones logged yet — add some from the Timeline tab first.
+        </div>
+      ) : (
+        <RecapEntryList entries={entries} />
+      )}
+
+      {/* Print-only intro — the editable textarea above is hidden via .no-print */}
+      <div className="print-only" style={{ display: "none" }}>
+        {recap.intro_text && (
+          <div className="pr-intro" style={{ background: C.terracotta, color: C.white, borderRadius: 14, padding: "20px 24px", marginBottom: 24, lineHeight: 1.7, fontSize: 14 }}>
+            {recap.intro_text}
+          </div>
+        )}
+      </div>
+
+      <style>{PROGRESS_PRINT_CSS}</style>
+    </div>
+  );
+}
+
+function RecapHeader({ childName, winCount, milestoneCount, spanLabel }) {
+  return (
+    <div style={{ marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${C.gold}` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>
+            Progress Recap
+          </div>
+          <div style={{ fontFamily: font.display, fontSize: 24, color: C.dark }}>
+            {childName ? `${childName}'s Journey` : "Your Journey"}
+          </div>
+          <div style={{ fontSize: 13, color: C.mid, marginTop: 4 }}>
+            {winCount} win{winCount !== 1 ? "s" : ""} · {milestoneCount} milestone{milestoneCount !== 1 ? "s" : ""}
+            {spanLabel ? ` · captured over ${spanLabel}` : ""}
+          </div>
+        </div>
+        <img
+          src={LOGO_URL}
+          alt="Signs for Sleep"
+          style={{ maxWidth: 180, width: "100%", height: "auto" }}
+          onError={(e) => { e.target.style.display = "none"; }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function RecapEntryList({ entries }) {
+  return (
+    <div>
+      {entries.map((entry) => {
+        const tagConfig = PROGRESS_TAGS.find((t) => t.key === entry.tag) || PROGRESS_TAGS[0];
+        return (
+          <div key={entry.id} style={{ borderLeft: `4px solid ${tagConfig.color}`, paddingLeft: 14, marginBottom: 16, pageBreakInside: "avoid" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, flexWrap: "wrap", gap: 6 }}>
+              <span style={{ fontWeight: 700, fontSize: 13, color: tagConfig.color }}>{tagConfig.emoji} {tagConfig.label}</span>
+              <span style={{ fontSize: 11, color: C.muted }}>
+                {new Date(entry.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+              </span>
+            </div>
+            {entry.note && <div style={{ fontSize: 14, color: C.dark, lineHeight: 1.6 }}>{entry.note}</div>}
+          </div>
+        );
+      })}
     </div>
   );
 }
