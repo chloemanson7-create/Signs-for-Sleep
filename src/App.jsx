@@ -4100,15 +4100,8 @@ function ProgressRecap({ clientId, isCoach }) {
         />
       </div>
 
-      {entries.length === 0 ? (
-        <div style={{ ...gStyle.card, textAlign: "center", padding: 40, color: C.muted }}>
-          No wins or milestones logged yet — add some from the Timeline tab first.
-        </div>
-      ) : (
-        <RecapEntryList entries={entries} />
-      )}
-
-      {/* Print-only intro — the editable textarea above is hidden via .no-print */}
+      {/* Print-only intro — the editable textarea above is hidden via .no-print.
+          Placed here (before the entries list) so print order matches the on-screen order. */}
       <div className="print-only" style={{ display: "none" }}>
         {recap.intro_text && (
           <div className="pr-intro" style={{ background: C.terracotta, color: C.white, borderRadius: 14, padding: "20px 24px", marginBottom: 24, lineHeight: 1.7, fontSize: 14 }}>
@@ -4116,6 +4109,14 @@ function ProgressRecap({ clientId, isCoach }) {
           </div>
         )}
       </div>
+
+      {entries.length === 0 ? (
+        <div style={{ ...gStyle.card, textAlign: "center", padding: 40, color: C.muted }}>
+          No wins or milestones logged yet — add some from the Timeline tab first.
+        </div>
+      ) : (
+        <RecapEntryList entries={entries} />
+      )}
 
       <style>{PROGRESS_PRINT_CSS}</style>
     </div>
