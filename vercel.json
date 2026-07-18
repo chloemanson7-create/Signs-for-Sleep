@@ -1,3 +1,6 @@
-{ 
-  "rewrites": [{ "source": "/(.*)", "destination": "/" }]
+{
+  "rewrites": [
+    { "source": "/files/:path*", "destination": "https://zkesnhhduxtxinjdkbyn.supabase.co/storage/v1/object/public/resources/:path*" },
+    { "source": "/(.*)", "destination": "/" }
+  ]
 }
