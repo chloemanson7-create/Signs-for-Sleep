@@ -4220,6 +4220,19 @@ function groupByCategory(resources) {
   return groups;
 }
 
+// Converts a raw Supabase storage URL into a branded path on your own domain
+// (yoursite.com/files/...) via the rewrite rule in vercel.json — the file
+// still physically lives in Supabase, this just hides the address in the
+// browser's address bar. Falls back to the raw URL if it doesn't match the
+// expected pattern, so nothing breaks if the storage setup ever changes.
+function resourceFileUrl(rawUrl) {
+  if (!rawUrl) return rawUrl;
+  const marker = "/storage/v1/object/public/resources/";
+  const idx = rawUrl.indexOf(marker);
+  if (idx === -1) return rawUrl;
+  return "/files/" + rawUrl.slice(idx + marker.length);
+}
+
 // Renders a video player or a "view PDF" link, depending on resource type.
 function ResourceMedia({ resource }) {
   if (resource.type === "video") {
@@ -4229,13 +4242,13 @@ function ResourceMedia({ resource }) {
         playsInline
         preload="metadata"
         style={{ width: "100%", borderRadius: 10, background: "#000", display: "block" }}
-        src={resource.file_url}
+        src={resourceFileUrl(resource.file_url)}
       />
     );
   }
   return (
     <a
-      href={resource.file_url}
+      href={resourceFileUrl(resource.file_url)}
       target="_blank"
       rel="noopener noreferrer"
       style={{
@@ -4458,7 +4471,7 @@ function ResourceLibraryManager({ onBack }) {
                     <span style={gStyle.tag(C.terracottaDark, C.terracottaLight)}>{accessLabel(r.default_access)}</span>
                   </div>
                   {r.description && <p style={{ fontSize: 13, color: C.mid, margin: "0 0 8px" }}>{r.description}</p>}
-                  <a href={r.file_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: C.blue }}>
+                  <a href={resourceFileUrl(r.file_url)} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: C.blue }}>
                     View file →
                   </a>
                 </div>
