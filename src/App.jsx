@@ -659,6 +659,15 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Register the PWA service worker so the app can be installed to a
+  // phone's home screen and load instantly / work offline. Silently does
+  // nothing on browsers that don't support it.
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+  }, []);
+
   useEffect(() => {
     const stored = localStorage.getItem("sfs_session");
     if (stored) {
