@@ -914,7 +914,7 @@ function LoginScreen({ onLogin }) {
 // COACH APP
 // ═══════════════════════════════════════════════════════════════════════════
 function CoachApp({ session, onLogout }) {
-  const [view, setView] = useState("dashboard"); // dashboard | client | settings
+  const [view, setView] = useState("dashboard"); // dashboard | client | resources | settings
   const [selectedClient, setSelectedClient] = useState(null);
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -939,6 +939,7 @@ function CoachApp({ session, onLogout }) {
         subtitle="Coach Dashboard"
         right={
           <div style={{ display: "flex", gap: 8 }}>
+            <button style={{ ...gStyle.btnSecondary, padding: "8px 14px" }} onClick={() => setView("resources")}>📚 Resources</button>
             <button style={{ ...gStyle.btnSecondary, padding: "8px 14px" }} onClick={() => setView("settings")}>Settings</button>
             <button style={{ ...gStyle.btnSecondary, padding: "8px 14px" }} onClick={onLogout}>Log out</button>
           </div>
@@ -950,6 +951,9 @@ function CoachApp({ session, onLogout }) {
         )}
         {view === "client" && selectedClient && (
           <ClientDetail client={selectedClient} onBack={back} onRefresh={fetchClients} />
+        )}
+        {view === "resources" && (
+          <ResourceLibraryManager onBack={() => setView("dashboard")} />
         )}
         {view === "settings" && (
           <CoachSettings onBack={() => setView("dashboard")} />
@@ -1196,6 +1200,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
     { key: "plan", label: "📋 Sleep Plan" },
     { key: "progress", label: "🎉 Progress" },
     { key: "toolbox", label: "🧰 Toolbox" },
+    { key: "resources", label: "🎬 Resources" },
     { key: "notes", label: "Notes" },
     { key: "settings", label: "Settings" },
   ];
@@ -1230,6 +1235,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
       {tab === "plan" && <SleepPlanEditor clientId={client.id} clientData={clientData} isCoach={true} />}
       {tab === "progress" && <ProgressTab clientId={client.id} clientData={clientData} isCoach={true} />}
       {tab === "toolbox" && <KnowledgeToolbox clientId={client.id} clientData={clientData} isCoach={true} />}
+      {tab === "resources" && <ClientResourceGrants clientId={client.id} clientData={clientData} />}
       {tab === "notes" && <CoachNotes clientId={client.id} />}
       {tab === "settings" && <ClientSettings client={clientData} onRefresh={refresh} onDelete={onBack} />}
     </>
@@ -1713,6 +1719,7 @@ function ClientApp({ session, onLogout }) {
     { key: "intake", label: "Questionnaire" },
     { key: "plan", label: "📋 Sleep Plan" },
     { key: "toolbox", label: "🧰 Toolbox" },
+    { key: "resources", label: "🎬 Resources" },
   ];
 
   // Check-in call eligibility
@@ -1787,6 +1794,7 @@ function ClientApp({ session, onLogout }) {
         {tab === "progress" && <ProgressTab clientId={session.clientId} isCoach={false} />}
         {tab === "plan" && <SleepPlanEditor clientId={session.clientId} isCoach={false} />}
         {tab === "toolbox" && <KnowledgeToolbox clientId={session.clientId} isCoach={false} />}
+        {tab === "resources" && <ClientResourcesViewer clientId={session.clientId} />}
         {tab === "intake" && (
           <IntakeForm
             clientId={session.clientId}
@@ -4176,6 +4184,484 @@ function RecapEntryList({ entries }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RESOURCE LIBRARY — videos + PDFs, shared across clients with tiered access
+// ═══════════════════════════════════════════════════════════════════════════
+
+const RESOURCE_ACCESS_LEVELS = [
+  { key: "all",          label: "All clients" },
+  { key: "gentle_start", label: "Gentle Start only" },
+  { key: "foundations",  label: "Foundations only" },
+  { key: "private",      label: "Private (manual only)" },
+];
+
+function accessLabel(key) {
+  return RESOURCE_ACCESS_LEVELS.find((a) => a.key === key)?.label || key;
+}
+
+// Does this resource come included automatically, based on the client's package?
+function resourceIncludedByDefault(resource, clientPackage) {
+  if (resource.default_access === "all") return true;
+  if (resource.default_access && resource.default_access === clientPackage) return true;
+  return false;
+}
+
+function groupByCategory(resources) {
+  const groups = {};
+  resources.forEach((r) => {
+    const cat = r.category?.trim() || "General";
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(r);
+  });
+  return groups;
+}
+
+// Renders a video player or a "view PDF" link, depending on resource type.
+function ResourceMedia({ resource }) {
+  if (resource.type === "video") {
+    return (
+      <video
+        controls
+        playsInline
+        preload="metadata"
+        style={{ width: "100%", borderRadius: 10, background: "#000", display: "block" }}
+        src={resource.file_url}
+      />
+    );
+  }
+  return (
+    <a
+      href={resource.file_url}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: "flex", alignItems: "center", gap: 10, padding: "16px",
+        background: C.cream, borderRadius: 10, textDecoration: "none",
+        color: C.terracottaDark, fontWeight: 600, fontSize: 14,
+      }}
+    >
+      📄 View PDF
+    </a>
+  );
+}
+
+// ── COACH: top-level library manager (upload once, reuse everywhere) ───────
+function ResourceLibraryManager({ onBack }) {
+  const [resources, setResources] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+
+  const [type, setType] = useState("video");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("");
+  const [defaultAccess, setDefaultAccess] = useState("private");
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadResources = useCallback(async () => {
+    const { data } = await supabase.from("resource_library")
+      .select("*")
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    setResources(data || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadResources(); }, [loadResources]);
+
+  const resetForm = () => {
+    setType("video"); setTitle(""); setDescription(""); setCategory("");
+    setDefaultAccess("private"); setFile(null); setEditingId(null); setError("");
+  };
+
+  const startEdit = (r) => {
+    setEditingId(r.id);
+    setType(r.type);
+    setTitle(r.title);
+    setDescription(r.description || "");
+    setCategory(r.category || "");
+    setDefaultAccess(r.default_access);
+    setFile(null);
+    setError("");
+    setShowForm(true);
+  };
+
+  const uploadFile = async (f) => {
+    const ext = f.name.split(".").pop();
+    const path = `${type}s/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const { error: upErr } = await supabase.storage
+      .from("resources")
+      .upload(path, f, { cacheControl: "3600", upsert: false });
+    if (upErr) throw upErr;
+    const { data } = supabase.storage.from("resources").getPublicUrl(path);
+    return data.publicUrl;
+  };
+
+  const save = async () => {
+    if (!title.trim()) { setError("Give it a title first."); return; }
+    if (!editingId && !file) { setError("Choose a file to upload."); return; }
+    setUploading(true);
+    setError("");
+    try {
+      let fileUrl = null;
+      if (file) fileUrl = await uploadFile(file);
+
+      if (editingId) {
+        const payload = {
+          type, title: title.trim(), description: description.trim() || null,
+          category: category.trim() || null, default_access: defaultAccess,
+        };
+        if (fileUrl) payload.file_url = fileUrl;
+        await supabase.from("resource_library").update(payload).eq("id", editingId);
+      } else {
+        await supabase.from("resource_library").insert({
+          type, title: title.trim(), description: description.trim() || null,
+          category: category.trim() || null, default_access: defaultAccess,
+          file_url: fileUrl, sort_order: resources.length,
+        });
+      }
+      resetForm();
+      setShowForm(false);
+      loadResources();
+    } catch (e) {
+      setError(e.message || "Something went wrong uploading that file.");
+    }
+    setUploading(false);
+  };
+
+  const deleteResource = async (id) => {
+    await supabase.from("resource_library").delete().eq("id", id);
+    loadResources();
+  };
+
+  if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading resource library…</p>;
+
+  const grouped = groupByCategory(resources);
+  const categories = Object.keys(grouped).sort();
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ ...gStyle.btnSecondary, marginBottom: 20 }}>← Back</button>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h1 style={{ fontFamily: font.display, fontSize: 26, color: C.terracotta, margin: "0 0 4px" }}>Resource Library</h1>
+          <p style={{ fontSize: 13, color: C.muted, margin: 0 }}>Videos and guides you can share across all your clients</p>
+        </div>
+        <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={() => { resetForm(); setShowForm(true); }}>
+          + Add Resource
+        </button>
+      </div>
+
+      {showForm && (
+        <div style={{ ...gStyle.card, borderColor: C.terracotta, marginBottom: 24 }}>
+          <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 16px" }}>
+            {editingId ? "Edit Resource" : "New Resource"}
+          </h3>
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={gStyle.label}>Type</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {[{ key: "video", label: "🎬 Video" }, { key: "pdf", label: "📄 PDF" }].map((t) => (
+                <button key={t.key} onClick={() => !editingId && setType(t.key)} style={{
+                  padding: "8px 16px", borderRadius: 8, border: "none",
+                  cursor: editingId ? "default" : "pointer", fontFamily: font.body, fontSize: 13, fontWeight: 600,
+                  background: type === t.key ? C.terracotta : C.terracottaLight,
+                  color: type === t.key ? C.white : C.terracottaDark,
+                  opacity: editingId && type !== t.key ? 0.5 : 1,
+                }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+            <div>
+              <label style={gStyle.label}>Title</label>
+              <input style={gStyle.input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Sign for 'sleep'" />
+            </div>
+            <div>
+              <label style={gStyle.label}>Category (for grouping)</label>
+              <input style={gStyle.input} list="resource-categories" value={category}
+                onChange={(e) => setCategory(e.target.value)} placeholder="e.g. First Signs" />
+              <datalist id="resource-categories">
+                {[...new Set(resources.map((r) => r.category).filter(Boolean))].map((c) => <option key={c} value={c} />)}
+              </datalist>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={gStyle.label}>Description</label>
+            <textarea style={{ ...gStyle.input, minHeight: 60, resize: "vertical" }} value={description}
+              onChange={(e) => setDescription(e.target.value)} placeholder="A short line explaining what this is…" />
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={gStyle.label}>Who gets this automatically?</label>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {RESOURCE_ACCESS_LEVELS.map((a) => (
+                <button key={a.key} onClick={() => setDefaultAccess(a.key)} style={{
+                  padding: "8px 14px", borderRadius: 8, border: "none", cursor: "pointer",
+                  fontFamily: font.body, fontSize: 13, fontWeight: 600,
+                  background: defaultAccess === a.key ? C.terracotta : C.terracottaLight,
+                  color: defaultAccess === a.key ? C.white : C.terracottaDark,
+                }}>
+                  {a.label}
+                </button>
+              ))}
+            </div>
+            <p style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+              "Private" means it's hidden until you grant it to specific clients from their profile's Resources tab.
+            </p>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={gStyle.label}>{editingId ? "Replace file (optional)" : "File"}</label>
+            <input type="file" accept={type === "video" ? "video/*" : "application/pdf"}
+              onChange={(e) => setFile(e.target.files?.[0] || null)} />
+            {editingId && <p style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Leave empty to keep the existing file.</p>}
+          </div>
+
+          {error && <p style={{ color: C.danger, fontSize: 13, marginBottom: 12 }}>{error}</p>}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={save} disabled={uploading}>
+              {uploading ? "Uploading…" : editingId ? "Save changes" : "Add to library"}
+            </button>
+            <button style={gStyle.btnSecondary} onClick={() => { resetForm(); setShowForm(false); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {resources.length === 0 ? (
+        <div style={{ ...gStyle.card, textAlign: "center", padding: 48, color: C.muted }}>
+          Nothing in your library yet — click "+ Add Resource" to upload your first video or guide.
+        </div>
+      ) : (
+        categories.map((cat) => (
+          <div key={cat} style={{ marginBottom: 28 }}>
+            <h3 style={{ fontFamily: font.display, color: C.terracottaDark, fontSize: 16, margin: "0 0 12px" }}>{cat}</h3>
+            {grouped[cat].map((r) => (
+              <div key={r.id} style={{ ...gStyle.card, display: "flex", gap: 14, alignItems: "flex-start" }}>
+                <div style={{ fontSize: 24, flexShrink: 0 }}>{r.type === "video" ? "🎬" : "📄"}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                    <span style={{ fontWeight: 700, fontSize: 15, color: C.dark }}>{r.title}</span>
+                    <span style={gStyle.tag(C.terracottaDark, C.terracottaLight)}>{accessLabel(r.default_access)}</span>
+                  </div>
+                  {r.description && <p style={{ fontSize: 13, color: C.mid, margin: "0 0 8px" }}>{r.description}</p>}
+                  <a href={r.file_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: C.blue }}>
+                    View file →
+                  </a>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <button style={{ ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12 }} onClick={() => startEdit(r)}>Edit</button>
+                  <button style={{ ...gStyle.btnDanger, padding: "6px 12px", fontSize: 12 }} onClick={() => deleteResource(r.id)}>Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ── COACH: per-client Resources tab — see what's included, grant/revoke extras ──
+function ClientResourceGrants({ clientId, clientData }) {
+  const [resources, setResources] = useState([]);
+  const [grantedIds, setGrantedIds] = useState(new Set());
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+
+  const clientPackage = clientData?.package || null;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data: allResources } = await supabase.from("resource_library")
+      .select("*").order("sort_order", { ascending: true }).order("created_at", { ascending: true });
+    const { data: grants } = await supabase.from("client_resource_grants")
+      .select("resource_id").eq("client_id", clientId);
+    setResources(allResources || []);
+    setGrantedIds(new Set((grants || []).map((g) => g.resource_id)));
+    setLoading(false);
+  }, [clientId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggleGrant = async (resourceId, currentlyGranted) => {
+    setBusyId(resourceId);
+    if (currentlyGranted) {
+      await supabase.from("client_resource_grants").delete()
+        .eq("client_id", clientId).eq("resource_id", resourceId);
+    } else {
+      await supabase.from("client_resource_grants").insert({ client_id: clientId, resource_id: resourceId });
+    }
+    await load();
+    setBusyId(null);
+  };
+
+  if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading resources…</p>;
+
+  if (resources.length === 0) return (
+    <div style={{ ...gStyle.card, textAlign: "center", padding: 48, color: C.muted }}>
+      Your resource library is empty — add videos or guides from the 📚 Resources button up top first.
+    </div>
+  );
+
+  const included = resources.filter((r) => resourceIncludedByDefault(r, clientPackage));
+  const grantedExtras = resources.filter((r) => !resourceIncludedByDefault(r, clientPackage) && grantedIds.has(r.id));
+  const browsable = resources.filter((r) => !resourceIncludedByDefault(r, clientPackage));
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 4px" }}>Included automatically</h3>
+        <p style={{ fontSize: 12, color: C.muted, margin: "0 0 12px" }}>
+          {clientPackage
+            ? `Based on their ${PACKAGES[clientPackage]?.label || clientPackage} package, plus anything marked "All clients."`
+            : `This client has no package set — only "All clients" resources show here.`}
+        </p>
+        {included.length === 0 ? (
+          <p style={{ fontSize: 13, color: C.muted }}>Nothing included automatically yet.</p>
+        ) : (
+          included.map((r) => (
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+              <span style={{ fontSize: 18 }}>{r.type === "video" ? "🎬" : "📄"}</span>
+              <span style={{ fontSize: 14, color: C.dark, flex: 1 }}>{r.title}</span>
+              <span style={gStyle.tag(C.success, C.successLight)}>Included</span>
+            </div>
+          ))
+        )}
+      </div>
+
+      {grantedExtras.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <h3 style={{ fontFamily: font.display, color: C.gold, margin: "0 0 12px" }}>Extra access granted</h3>
+          {grantedExtras.map((r) => (
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+              <span style={{ fontSize: 18 }}>{r.type === "video" ? "🎬" : "📄"}</span>
+              <span style={{ fontSize: 14, color: C.dark, flex: 1 }}>{r.title}</span>
+              <button
+                style={{ ...gStyle.btnSecondary, padding: "5px 12px", fontSize: 12 }}
+                onClick={() => toggleGrant(r.id, true)}
+                disabled={busyId === r.id}
+              >
+                Revoke
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div>
+        <h3 style={{ fontFamily: font.display, color: C.dark, margin: "0 0 4px" }}>Browse full library</h3>
+        <p style={{ fontSize: 12, color: C.muted, margin: "0 0 12px" }}>
+          Toggle anything extra you'd like to give this client, regardless of their package.
+        </p>
+        {browsable.length === 0 ? (
+          <p style={{ fontSize: 13, color: C.muted }}>Everything in your library is already included for this client.</p>
+        ) : (
+          browsable.map((r) => {
+            const granted = grantedIds.has(r.id);
+            return (
+              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ fontSize: 18 }}>{r.type === "video" ? "🎬" : "📄"}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, color: C.dark }}>{r.title}</div>
+                  <div style={{ fontSize: 11, color: C.muted }}>{accessLabel(r.default_access)}</div>
+                </div>
+                <button
+                  onClick={() => toggleGrant(r.id, granted)}
+                  disabled={busyId === r.id}
+                  style={{
+                    padding: "6px 14px", borderRadius: 20, border: "none", cursor: "pointer",
+                    fontFamily: font.body, fontSize: 12, fontWeight: 600,
+                    background: granted ? C.success : C.terracottaLight,
+                    color: granted ? C.white : C.terracottaDark,
+                  }}
+                >
+                  {granted ? "✓ Granted" : "Grant"}
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── CLIENT: read-only viewer, grouped by category ───────────────────────────
+function ClientResourcesViewer({ clientId }) {
+  const [resources, setResources] = useState([]);
+  const [clientPackage, setClientPackage] = useState(null);
+  const [grantedIds, setGrantedIds] = useState(new Set());
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      const { data: clientRow } = await supabase.from("clients").select("package").eq("id", clientId).maybeSingle();
+      setClientPackage(clientRow?.package || null);
+
+      const { data: allResources } = await supabase.from("resource_library")
+        .select("*").order("sort_order", { ascending: true }).order("created_at", { ascending: true });
+      setResources(allResources || []);
+
+      const { data: grants } = await supabase.from("client_resource_grants")
+        .select("resource_id").eq("client_id", clientId);
+      setGrantedIds(new Set((grants || []).map((g) => g.resource_id)));
+
+      setLoading(false);
+    };
+    load();
+  }, [clientId]);
+
+  if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading resources…</p>;
+
+  const accessible = resources.filter((r) => resourceIncludedByDefault(r, clientPackage) || grantedIds.has(r.id));
+
+  if (accessible.length === 0) return (
+    <div style={{ ...gStyle.card, textAlign: "center", padding: 48, color: C.muted }}>
+      <div style={{ fontSize: 32, marginBottom: 12 }}>🎬</div>
+      <p style={{ fontSize: 16, marginBottom: 8 }}>No resources available yet.</p>
+      <p style={{ fontSize: 13 }}>Your consultant will add videos and guides here as they become relevant.</p>
+    </div>
+  );
+
+  const grouped = groupByCategory(accessible);
+  const categories = Object.keys(grouped).sort();
+
+  return (
+    <div>
+      {categories.map((cat) => (
+        <div key={cat} style={{ marginBottom: 28 }}>
+          <h3 style={{ fontFamily: font.display, color: C.terracotta, fontSize: 18, margin: "0 0 14px" }}>{cat}</h3>
+          <div className="resource-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            {grouped[cat].map((r) => (
+              <div key={r.id} style={gStyle.card}>
+                <ResourceMedia resource={r} />
+                <div style={{ fontWeight: 700, fontSize: 14, color: C.dark, margin: "10px 0 2px" }}>{r.title}</div>
+                {r.description && <div style={{ fontSize: 12, color: C.mid }}>{r.description}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      <style>{`
+        @media screen and (max-width: 640px) {
+          .resource-grid { grid-template-columns: 1fr !important; }
+        }
+      `}</style>
     </div>
   );
 }
