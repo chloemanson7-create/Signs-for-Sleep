@@ -217,6 +217,8 @@ const WHEEL_MINS  = Array.from({ length: 60 }, (_, i) => String(i).padStart(2,"0
 const WHEEL_AMPM  = ["am","pm"];
 const ITEM_H = 40;  // px height of each item
 const VISIBLE = 5;  // items visible, centre = selected
+const REPEATS = 9;  // odd number of copies stacked for the circular/infinite-scroll effect
+const MID_COPY = Math.floor(REPEATS / 2);
 
 function parse24ToWheel(t) {
   if (!t) return { h: null, m: null, ampm: null };
@@ -235,28 +237,55 @@ function wheelTo24(h, m, ampm) {
   return `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
 }
 
-function WheelColumn({ items, selected, onSelect }) {
+// Scroll-wheel column used by TimeSelect and DurationSelect.
+// circular=true (default) makes it wrap infinitely (12→1→...→11→12, etc) by
+// stacking the item list several times and silently recentring the scroll
+// position near the middle copy once you drift toward either outer edge —
+// since every copy is visually identical, that recentre is imperceptible.
+// circular=false gives a plain, non-wrapping list (used for AM/PM, where
+// wrapping a 2-item list doesn't add anything).
+function WheelColumn({ items, selected, onSelect, circular = true }) {
   const scrollRef = useRef(null);
   const timerRef  = useRef(null);
+  const n = items.length;
   const selStr = selected !== null ? String(selected) : null;
-  const idx = selStr !== null ? items.indexOf(selStr) : -1;
+  const selectedIdx = selStr !== null ? items.indexOf(selStr) : 0; // untouched wheels rest on item 0
 
+  const scrollToIndex = (itemIdx) => {
+    if (!scrollRef.current) return;
+    const target = circular ? MID_COPY * n + itemIdx : itemIdx;
+    scrollRef.current.scrollTop = target * ITEM_H;
+  };
+
+  // Re-sync scroll position whenever the selected value changes from OUTSIDE
+  // (e.g. switching to a different saved diary entry), not on every render.
   useEffect(() => {
-    if (scrollRef.current && idx >= 0) {
-      scrollRef.current.scrollTop = idx * ITEM_H;
-    }
-  }, [idx]);
+    scrollToIndex(selectedIdx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selStr]);
 
   const onScroll = () => {
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       if (!scrollRef.current) return;
-      const snapped = Math.round(scrollRef.current.scrollTop / ITEM_H);
-      const clamped = Math.max(0, Math.min(items.length - 1, snapped));
-      scrollRef.current.scrollTop = clamped * ITEM_H;
-      onSelect(items[clamped]);
+      const rawIndex = Math.round(scrollRef.current.scrollTop / ITEM_H);
+      let itemIdx, finalRaw;
+      if (circular) {
+        itemIdx = ((rawIndex % n) + n) % n;
+        const copy = Math.floor(rawIndex / n);
+        finalRaw = (copy <= 1 || copy >= REPEATS - 2) ? MID_COPY * n + itemIdx : rawIndex;
+      } else {
+        itemIdx = Math.max(0, Math.min(n - 1, rawIndex));
+        finalRaw = itemIdx;
+      }
+      scrollRef.current.scrollTop = finalRaw * ITEM_H;
+      onSelect(items[itemIdx]);
     }, 100);
   };
+
+  const fullList = circular
+    ? Array.from({ length: REPEATS * n }, (_, i) => items[i % n])
+    : items;
 
   return (
     <div style={{ position: "relative", flex: 1, overflow: "hidden" }}>
@@ -294,15 +323,15 @@ function WheelColumn({ items, selected, onSelect }) {
         }}
       >
         <div style={{ height: ITEM_H * Math.floor(VISIBLE / 2) }} />
-        {items.map((item) => {
-          const active = selStr === item;
+        {fullList.map((item, i) => {
+          const itemIdx = i % n;
+          const active = selStr !== null ? item === selStr : itemIdx === 0;
           return (
             <div
-              key={item}
+              key={i}
               onClick={() => {
                 onSelect(item);
-                const i = items.indexOf(item);
-                if (scrollRef.current) scrollRef.current.scrollTop = i * ITEM_H;
+                scrollToIndex(itemIdx);
               }}
               style={{
                 height: ITEM_H, display: "flex",
@@ -349,20 +378,21 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
     return () => document.removeEventListener("mousedown", fn);
   }, [open]);
 
+  // Only fires when a wheel is genuinely touched (click or scroll-settle).
+  // At that moment, any OTHER wheel that's still untouched (null) commits to
+  // whatever it's currently resting on — so tapping just the hour wheel while
+  // minutes rests on "00" correctly saves ":00" instead of silently staying
+  // unset. Opening the picker and closing it without touching anything still
+  // leaves the value blank, since handle() never fires in that case.
   const handle = (field, val) => {
-    const next = {
-      h:    field === "h"    ? val  : h,
-      m:    field === "m"    ? val  : m,
-      ampm: field === "ampm" ? val  : ampm,
-    };
-    if (field === "h")    setH(val);
-    if (field === "m")    setM(val);
-    if (field === "ampm") setAmpm(val);
-    // Only fire onChange when all three are valid
-    if (next.h !== null && next.m !== null && next.ampm) {
-      const result = wheelTo24(next.h, next.m, next.ampm);
-      if (result) onChange(result);
-    }
+    const nextH = field === "h" ? val : (h !== null ? h : 12);
+    const nextM = field === "m" ? val : (m !== null ? m : 0);
+    const nextAmpm = field === "ampm" ? val : (ampm || "am");
+    if (field === "h") setH(val); else if (h === null) setH(12);
+    if (field === "m") setM(val); else if (m === null) setM(0);
+    if (field === "ampm") setAmpm(val); else if (!ampm) setAmpm("am");
+    const result = wheelTo24(nextH, nextM, nextAmpm);
+    if (result) onChange(result);
   };
 
   const label = h !== null && m !== null
@@ -419,6 +449,7 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
               items={WHEEL_AMPM}
               selected={ampm}
               onSelect={(v) => handle("ampm", v)}
+              circular={false}
             />
           </div>
           <button
@@ -478,15 +509,11 @@ function DurationSelect({ value, onChange, disabled, placeholder }) {
   }, [open]);
 
   const handle = (field, val) => {
-    const next = {
-      h: field === "h" ? val : h,
-      m: field === "m" ? val : m,
-    };
-    if (field === "h") setH(val);
-    if (field === "m") setM(val);
-    if (next.h !== null && next.m !== null) {
-      onChange(wheelToMins(next.h, next.m));
-    }
+    const nextH = field === "h" ? val : (h !== null ? h : 0);
+    const nextM = field === "m" ? val : (m !== null ? m : 0);
+    if (field === "h") setH(val); else if (h === null) setH(0);
+    if (field === "m") setM(val); else if (m === null) setM(0);
+    onChange(wheelToMins(nextH, nextM));
   };
 
   const label = h !== null && m !== null
@@ -1713,13 +1740,13 @@ function ClientApp({ session, onLogout }) {
   }, [session.clientId]);
 
   const tabs = [
+    { key: "intake", label: "Questionnaire" },
     { key: "diary", label: "Sleep Diary" },
     { key: "analysis", label: "📊 Analysis" },
-    { key: "progress", label: "🎉 Progress" },
-    { key: "intake", label: "Questionnaire" },
     { key: "plan", label: "📋 Sleep Plan" },
-    { key: "toolbox", label: "🧰 Toolbox" },
+    { key: "progress", label: "🎉 Progress" },
     { key: "resources", label: "🎬 Resources" },
+    { key: "toolbox", label: "🧰 Toolbox" },
   ];
 
   // Check-in call eligibility
