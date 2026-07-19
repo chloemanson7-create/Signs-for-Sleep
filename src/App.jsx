@@ -2020,7 +2020,7 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
 
 // ── SLEEP DIARY ─────────────────────────────────────────────────────────────
 const BOOKING_URL = "https://calendar.app.google/UJPyiq6md5VCxfuV6";
-const CHECKIN_BOOKING_URL = "https://calendar.app.google/zSnQxyG6BEYxUVch9";
+const CHECKIN_BOOKING_URL = "https://calendar.app.google/FucJD8hzzv7wdvZS9";
 const DIARY_DAYS_REQUIRED = 5;
 const CHECKIN_UNLOCK_DAYS = 7;
 
