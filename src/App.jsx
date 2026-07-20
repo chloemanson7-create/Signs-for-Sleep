@@ -1785,34 +1785,36 @@ function ClientApp({ session, onLogout }) {
             {t.label}
           </button>
         ))}
-        {/* Book a Call button — only for eligible clients */}
-        {checkinUnlocked && (
-          <a
-            href={CHECKIN_BOOKING_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              marginLeft: "auto",
-              padding: "8px 16px",
-              background: C.terracotta,
-              color: C.white,
-              borderRadius: 8,
-              fontSize: 13,
-              fontWeight: 600,
-              fontFamily: font.body,
-              textDecoration: "none",
-              whiteSpace: "nowrap",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-            }}
-          >
-            📞 Book a Call
-            <span style={{ background: "rgba(255,255,255,0.25)", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>
-              {callsRemaining} left
-            </span>
-          </a>
-        )}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <ContactCoachButton clientId={session.clientId} clientPackage={clientPackage?.package} defaultName={session.clientName} />
+          {/* Book a Call button — only for eligible clients */}
+          {checkinUnlocked && (
+            <a
+              href={CHECKIN_BOOKING_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                padding: "8px 16px",
+                background: C.terracotta,
+                color: C.white,
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                fontFamily: font.body,
+                textDecoration: "none",
+                whiteSpace: "nowrap",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              📞 Book a Call
+              <span style={{ background: "rgba(255,255,255,0.25)", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>
+                {callsRemaining} left
+              </span>
+            </a>
+          )}
+        </div>
       </div>
 
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
@@ -2050,6 +2052,71 @@ const BOOKING_URL = "https://calendar.app.google/UJPyiq6md5VCxfuV6";
 const CHECKIN_BOOKING_URL = "https://calendar.app.google/FucJD8hzzv7wdvZS9";
 const DIARY_DAYS_REQUIRED = 5;
 const CHECKIN_UNLOCK_DAYS = 7;
+
+// ── CONTACT COACH BUTTON ─────────────────────────────────────────────────────
+const WHATSAPP_NUMBER = "61494730269"; // no + or spaces — required format for wa.me links
+const COACH_EMAIL = "chloe@signsforsleep.com";
+
+// Foundations clients get a "Message Chloé" WhatsApp button; everyone else
+// (Gentle Start, or no package assigned yet) gets an "Email Chloé" button.
+// The "Hi Chloé, this is [name]" greeting only prefills the FIRST time a
+// client ever taps this button — tracked via clients.contact_button_used —
+// since after that they're continuing an existing conversation/thread and
+// don't need to re-introduce themselves.
+function ContactCoachButton({ clientId, clientPackage, defaultName }) {
+  const [parentName, setParentName] = useState(null);
+  const [alreadyUsed, setAlreadyUsed] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      const { data: intakeData } = await supabase.from("intake_responses")
+        .select("parent_name").eq("client_id", clientId).maybeSingle();
+      if (intakeData?.parent_name) setParentName(intakeData.parent_name);
+
+      const { data: clientRow } = await supabase.from("clients")
+        .select("contact_button_used").eq("id", clientId).maybeSingle();
+      setAlreadyUsed(!!clientRow?.contact_button_used);
+      setLoading(false);
+    };
+    load();
+  }, [clientId]);
+
+  const markUsed = () => {
+    if (alreadyUsed) return;
+    setAlreadyUsed(true);
+    supabase.from("clients").update({ contact_button_used: true }).eq("id", clientId);
+  };
+
+  if (loading) return null;
+
+  const name = (parentName || defaultName || "").trim();
+  const greeting = name ? `Hi Chloé, this is ${name}` : "";
+  const btnStyle = {
+    padding: "8px 16px", background: C.terracotta, color: C.white, borderRadius: 8,
+    fontSize: 13, fontWeight: 600, fontFamily: font.body, textDecoration: "none",
+    whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6,
+  };
+
+  if (clientPackage === "foundations") {
+    const text = !alreadyUsed && greeting ? `?text=${encodeURIComponent(greeting)}` : "";
+    return (
+      <a href={`https://wa.me/${WHATSAPP_NUMBER}${text}`} target="_blank" rel="noopener noreferrer" onClick={markUsed} style={btnStyle}>
+        💬 Message Chloé
+      </a>
+    );
+  }
+
+  // Gentle Start, or no package assigned yet
+  const params = new URLSearchParams();
+  params.set("subject", "Question from the Signs for Sleep app");
+  if (!alreadyUsed && greeting) params.set("body", greeting);
+  return (
+    <a href={`mailto:${COACH_EMAIL}?${params.toString()}`} onClick={markUsed} style={btnStyle}>
+      ✉️ Email Chloé
+    </a>
+  );
+}
 
 const PACKAGES = {
   gentle_start:  { label: "Gentle Start",       weeks: 4, days: 28, calls: 0, price: "$425" },
@@ -4260,17 +4327,40 @@ function resourceFileUrl(rawUrl) {
   return "/files/" + rawUrl.slice(idx + marker.length);
 }
 
-// Renders a video player or a "view PDF" link, depending on resource type.
+// Pulls the 11-character video ID out of any common YouTube URL shape
+// (watch?v=, youtu.be/, /embed/, /shorts/) so it can be dropped into an
+// embed player. Returns null if the link doesn't look like YouTube.
+function extractYouTubeId(url) {
+  if (!url) return null;
+  const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
+  return match ? match[1] : null;
+}
+
+// Renders an embedded YouTube player or a "view PDF" link, depending on
+// resource type. Videos are hosted on YouTube (as Unlisted) rather than
+// Supabase Storage — free tier's 50MB-per-file cap makes even short phone
+// video far too tight, and YouTube handles storage/compression/bandwidth
+// for free with no meaningful limit for clips this length.
 function ResourceMedia({ resource }) {
   if (resource.type === "video") {
+    const videoId = extractYouTubeId(resource.file_url);
+    if (!videoId) {
+      return (
+        <div style={{ padding: 16, background: C.cream, borderRadius: 10, color: C.danger, fontSize: 13 }}>
+          This video link couldn't be read — check it's a valid YouTube URL.
+        </div>
+      );
+    }
     return (
-      <video
-        controls
-        playsInline
-        preload="metadata"
-        style={{ width: "100%", borderRadius: 10, background: "#000", display: "block" }}
-        src={resourceFileUrl(resource.file_url)}
-      />
+      <div style={{ position: "relative", paddingTop: "56.25%", borderRadius: 10, overflow: "hidden", background: "#000" }}>
+        <iframe
+          src={`https://www.youtube.com/embed/${videoId}`}
+          title={resource.title || "Video"}
+          style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+        />
+      </div>
     );
   }
   return (
@@ -4302,6 +4392,7 @@ function ResourceLibraryManager({ onBack }) {
   const [category, setCategory] = useState("");
   const [defaultAccess, setDefaultAccess] = useState("private");
   const [file, setFile] = useState(null);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
 
@@ -4318,7 +4409,7 @@ function ResourceLibraryManager({ onBack }) {
 
   const resetForm = () => {
     setType("video"); setTitle(""); setDescription(""); setCategory("");
-    setDefaultAccess("private"); setFile(null); setEditingId(null); setError("");
+    setDefaultAccess("private"); setFile(null); setYoutubeUrl(""); setEditingId(null); setError("");
   };
 
   const startEdit = (r) => {
@@ -4329,6 +4420,7 @@ function ResourceLibraryManager({ onBack }) {
     setCategory(r.category || "");
     setDefaultAccess(r.default_access);
     setFile(null);
+    setYoutubeUrl(r.type === "video" ? (r.file_url || "") : "");
     setError("");
     setShowForm(true);
   };
@@ -4346,12 +4438,27 @@ function ResourceLibraryManager({ onBack }) {
 
   const save = async () => {
     if (!title.trim()) { setError("Give it a title first."); return; }
-    if (!editingId && !file) { setError("Choose a file to upload."); return; }
+
+    let fileUrl = null;
+
+    if (type === "video") {
+      const trimmedUrl = youtubeUrl.trim();
+      if (!trimmedUrl && !editingId) { setError("Paste the YouTube link."); return; }
+      if (trimmedUrl) {
+        if (!extractYouTubeId(trimmedUrl)) {
+          setError("Couldn't read a video ID from that link — check it's a full YouTube URL.");
+          return;
+        }
+        fileUrl = trimmedUrl;
+      }
+    } else {
+      if (!editingId && !file) { setError("Choose a PDF to upload."); return; }
+    }
+
     setUploading(true);
     setError("");
     try {
-      let fileUrl = null;
-      if (file) fileUrl = await uploadFile(file);
+      if (type === "pdf" && file) fileUrl = await uploadFile(file);
 
       if (editingId) {
         const payload = {
@@ -4371,7 +4478,7 @@ function ResourceLibraryManager({ onBack }) {
       setShowForm(false);
       loadResources();
     } catch (e) {
-      setError(e.message || "Something went wrong uploading that file.");
+      setError(e.message || "Something went wrong.");
     }
     setUploading(false);
   };
@@ -4463,12 +4570,27 @@ function ResourceLibraryManager({ onBack }) {
             </p>
           </div>
 
-          <div style={{ marginBottom: 14 }}>
-            <label style={gStyle.label}>{editingId ? "Replace file (optional)" : "File"}</label>
-            <input type="file" accept={type === "video" ? "video/*" : "application/pdf"}
-              onChange={(e) => setFile(e.target.files?.[0] || null)} />
-            {editingId && <p style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Leave empty to keep the existing file.</p>}
-          </div>
+          {type === "video" ? (
+            <div style={{ marginBottom: 14 }}>
+              <label style={gStyle.label}>YouTube link</label>
+              <input
+                style={gStyle.input}
+                value={youtubeUrl}
+                onChange={(e) => setYoutubeUrl(e.target.value)}
+                placeholder="https://youtube.com/watch?v=…"
+              />
+              <p style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+                Upload the clip to YouTube as "Unlisted" first, then paste the link here. Unlisted keeps it off your channel and search — only people with the link (or this embedded player) can see it.
+              </p>
+            </div>
+          ) : (
+            <div style={{ marginBottom: 14 }}>
+              <label style={gStyle.label}>{editingId ? "Replace file (optional)" : "File"}</label>
+              <input type="file" accept="application/pdf"
+                onChange={(e) => setFile(e.target.files?.[0] || null)} />
+              {editingId && <p style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Leave empty to keep the existing file.</p>}
+            </div>
+          )}
 
           {error && <p style={{ color: C.danger, fontSize: 13, marginBottom: 12 }}>{error}</p>}
 
