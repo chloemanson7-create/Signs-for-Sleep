@@ -1818,7 +1818,7 @@ function ClientApp({ session, onLogout }) {
       </div>
 
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
-        {tab === "diary" && <SleepDiaryViewer clientId={session.clientId} isCoach={false} />}
+        {tab === "diary" && <SleepDiaryViewer clientId={session.clientId} isCoach={false} consultBooked={clientPackage?.consult_booked} />}
         {tab === "analysis" && <SleepAnalysis client={{ id: session.clientId, name: session.clientName }} />}
         {tab === "progress" && <ProgressTab clientId={session.clientId} isCoach={false} />}
         {tab === "plan" && <SleepPlanEditor clientId={session.clientId} isCoach={false} />}
@@ -2099,20 +2099,27 @@ function ContactCoachButton({ clientId, clientPackage, defaultName }) {
   };
 
   if (clientPackage === "foundations") {
-    const text = !alreadyUsed && greeting ? `?text=${encodeURIComponent(greeting)}` : "";
+    // api.whatsapp.com + same-tab (no target="_blank") is documented as more
+    // reliable than wa.me at preserving the prefilled text through the
+    // mobile app handoff — wa.me opening in a new tab first can sometimes
+    // drop the query string when it redirects into the WhatsApp app.
+    const text = !alreadyUsed && greeting ? `&text=${encodeURIComponent(greeting)}` : "";
     return (
-      <a href={`https://wa.me/${WHATSAPP_NUMBER}${text}`} target="_blank" rel="noopener noreferrer" onClick={markUsed} style={btnStyle}>
+      <a href={`https://api.whatsapp.com/send?phone=${WHATSAPP_NUMBER}${text}`} onClick={markUsed} style={btnStyle}>
         💬 Message Chloé
       </a>
     );
   }
 
-  // Gentle Start, or no package assigned yet
-  const params = new URLSearchParams();
-  params.set("subject", "Question from the Signs for Sleep app");
-  if (!alreadyUsed && greeting) params.set("body", greeting);
+  // Gentle Start, or no package assigned yet.
+  // Built by hand with encodeURIComponent (not URLSearchParams) because
+  // URLSearchParams encodes spaces as "+", which mailto: links display
+  // literally instead of treating as a space — encodeURIComponent uses %20,
+  // which every mail client reads correctly.
+  const subject = encodeURIComponent("Weekly check-in email");
+  const bodyParam = !alreadyUsed && greeting ? `&body=${encodeURIComponent(greeting)}` : "";
   return (
-    <a href={`mailto:${COACH_EMAIL}?${params.toString()}`} onClick={markUsed} style={btnStyle}>
+    <a href={`mailto:${COACH_EMAIL}?subject=${subject}${bodyParam}`} onClick={markUsed} style={btnStyle}>
       ✉️ Email Chloé
     </a>
   );
@@ -2133,7 +2140,7 @@ const emptyEntry = () => ({
   naps: [emptyNap()],
 });
 
-function SleepDiaryViewer({ clientId, isCoach }) {
+function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   const [selectedDate, setSelectedDate] = useState(today());
   const [entry, setEntry] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -2319,13 +2326,13 @@ function SleepDiaryViewer({ clientId, isCoach }) {
   const totalNapMins = calcNapMins(entry);
   const nightSleepMins = entry.night_sleep_mins || null;
   const total24h = totalNapMins + (nightSleepMins || 0);
-  const bookingUnlocked = !isCoach && diaryCount >= DIARY_DAYS_REQUIRED;
+  const bookingUnlocked = !isCoach && !consultBooked && diaryCount >= DIARY_DAYS_REQUIRED;
   const daysRemaining = Math.max(0, DIARY_DAYS_REQUIRED - diaryCount);
 
   return (
     <div>
-      {/* Booking banner — client only */}
-      {!isCoach && (
+      {/* Booking banner — client only, and only until the coach has marked the consult as booked */}
+      {!isCoach && !consultBooked && (
         bookingUnlocked ? (
           <div style={{
             background: "linear-gradient(135deg, #C4714A 0%, #C9A84C 100%)",
