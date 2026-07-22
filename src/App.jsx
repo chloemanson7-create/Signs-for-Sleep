@@ -2573,6 +2573,17 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           onChange={(e) => update("notes", e.target.value)} disabled={isCoach} />
       </div>
 
+      {/* Date nav (bottom) */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 20, marginBottom: 20 }}>
+        <button onClick={() => changeDate(-1)} style={{ ...gStyle.btnSecondary, padding: "8px 14px" }}>←</button>
+        <input type="date" style={{ ...gStyle.input, flex: 1, textAlign: "center" }}
+          value={selectedDate} onChange={(e) => handleDateChange(e.target.value)}
+          max={today()}
+        />
+        <button onClick={() => changeDate(1)} style={{ ...gStyle.btnSecondary, padding: "8px 14px" }}
+          disabled={selectedDate >= today()}>→</button>
+      </div>
+
       {/* Save indicator */}
       {!isCoach && (
         <p style={{ textAlign: "center", fontSize: 12, color: savedMsg ? C.success : C.muted }}>
