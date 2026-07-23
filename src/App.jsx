@@ -1723,9 +1723,62 @@ function CoachSettings({ onBack }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CLIENT APP
-// ═══════════════════════════════════════════════════════════════════════════
+// ── YOUR PACKAGE (client-facing, no pricing shown) ──────────────────────────
+function YourPackageTab({ clientPackage }) {
+  if (!clientPackage) {
+    return <div style={gStyle.card}>Loading your package details…</div>;
+  }
+
+  const pkg = clientPackage.package && PACKAGES[clientPackage.package] ? PACKAGES[clientPackage.package] : null;
+  const extensionWeeks = clientPackage.extension_weeks || 0;
+  const start = clientPackage.support_start_date;
+  const total = clientPackage.support_days || DEFAULT_SUPPORT_DAYS;
+  const daysElapsed = start ? Math.max(0, daysBetween(start, today())) : 0;
+  const daysLeft = Math.max(0, total - daysElapsed);
+  const pct = Math.min(100, Math.round((daysElapsed / total) * 100));
+
+  if (!pkg) {
+    return (
+      <div style={gStyle.card}>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 8px" }}>Your Package</h3>
+        <p style={{ fontSize: 14, color: C.muted, margin: 0 }}>
+          Your package hasn't been set up yet — reach out to Chloé if you have any questions.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={gStyle.card}>
+      <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 16px" }}>Your Package</h3>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
+        <span style={gStyle.tag(C.terracottaDark, C.terracottaLight)}>{pkg.label}</span>
+        {extensionWeeks > 0 && (
+          <span style={gStyle.tag(C.gold, C.goldLight)}>
+            + {extensionWeeks} Extension Week{extensionWeeks > 1 ? "s" : ""}
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: C.muted, marginBottom: 6 }}>
+        <span>Day {daysElapsed} of {total}</span>
+        <span>{daysLeft} day{daysLeft !== 1 ? "s" : ""} of support remaining</span>
+      </div>
+      <div style={{ height: 8, background: C.terracottaLight, borderRadius: 4, overflow: "hidden", marginBottom: 20 }}>
+        <div style={{ height: "100%", width: `${pct}%`, background: C.terracotta, borderRadius: 4, transition: "width 0.3s" }} />
+      </div>
+
+      {extensionWeeks > 0 && (
+        <p style={{ fontSize: 13, color: C.dark, background: C.goldLight, borderRadius: 8, padding: "10px 14px", margin: 0 }}>
+          🧡 You've added {extensionWeeks} extension week{extensionWeeks > 1 ? "s" : ""} of ongoing support to your package.
+        </p>
+      )}
+    </div>
+  );
+}
+
+
 function ClientApp({ session, onLogout }) {
   const [tab, setTab] = useState("diary");
   const [hasIntake, setHasIntake] = useState(null);
@@ -1742,7 +1795,7 @@ function ClientApp({ session, onLogout }) {
         if (!done) setTab("intake");
       });
     // Load package info
-    supabase.from("clients").select("package, extension_weeks, calls_total, calls_used, consult_booked, is_app_tester")
+    supabase.from("clients").select("package, extension_weeks, calls_total, calls_used, consult_booked, is_app_tester, support_days, support_start_date")
       .eq("id", session.clientId).maybeSingle()
       .then(({ data }) => { if (data) setClientPackage(data); });
     // Load diary count
@@ -1754,6 +1807,7 @@ function ClientApp({ session, onLogout }) {
   const tabs = [
     { key: "intake", label: "Questionnaire" },
     { key: "diary", label: "Sleep Diary" },
+    { key: "package", label: "📦 Your Package" },
     { key: "analysis", label: "📊 Analysis" },
     { key: "plan", label: "📋 Sleep Plan" },
     { key: "progress", label: "🎉 Progress" },
@@ -1855,6 +1909,7 @@ function ClientApp({ session, onLogout }) {
 
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
         {tab === "diary" && <SleepDiaryViewer clientId={session.clientId} isCoach={false} consultBooked={clientPackage?.consult_booked} />}
+        {tab === "package" && <YourPackageTab clientPackage={clientPackage} />}
         {tab === "analysis" && <SleepAnalysis client={{ id: session.clientId, name: session.clientName }} />}
         {tab === "progress" && <ProgressTab clientId={session.clientId} isCoach={false} />}
         {tab === "plan" && <SleepPlanEditor clientId={session.clientId} isCoach={false} />}
