@@ -1430,6 +1430,7 @@ function ClientSettings({ client, onRefresh, onDelete }) {
   const [extensionWeeks, setExtensionWeeks] = useState(client.extension_weeks || 0);
   const [callsUsed, setCallsUsed] = useState(client.calls_used || 0);
   const [consultBooked, setConsultBooked] = useState(client.consult_booked || false);
+  const [isAppTester, setIsAppTester] = useState(client.is_app_tester || false);
   const [testimonialText, setTestimonialText] = useState(client.testimonial_text || "");
   const [feedbackText, setFeedbackText] = useState(client.feedback_text || "");
   const [saving, setSaving] = useState(false);
@@ -1473,6 +1474,7 @@ function ClientSettings({ client, onRefresh, onDelete }) {
       calls_total: callsTotal,
       calls_used: callsUsed,
       consult_booked: consultBooked,
+      is_app_tester: isAppTester,
     }).eq("id", client.id);
     setSaving(false);
     setMsg("Saved!");
@@ -1538,6 +1540,16 @@ function ClientSettings({ client, onRefresh, onDelete }) {
               style={{ accentColor: C.terracotta, width: 16, height: 16 }} />
             <label htmlFor="consultBooked" style={{ fontSize: 13, color: C.dark, cursor: "pointer" }}>
               Initial consult booked
+            </label>
+          </div>
+
+          {/* Founding Family / app tester toggle — shows the "Give Feedback" button in this client's app */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input type="checkbox" id="isAppTester" checked={isAppTester}
+              onChange={(e) => setIsAppTester(e.target.checked)}
+              style={{ accentColor: C.gold, width: 16, height: 16 }} />
+            <label htmlFor="isAppTester" style={{ fontSize: 13, color: C.dark, cursor: "pointer" }}>
+              🧪 Founding Family (app tester)
             </label>
           </div>
         </div>
@@ -1730,7 +1742,7 @@ function ClientApp({ session, onLogout }) {
         if (!done) setTab("intake");
       });
     // Load package info
-    supabase.from("clients").select("package, extension_weeks, calls_total, calls_used, consult_booked")
+    supabase.from("clients").select("package, extension_weeks, calls_total, calls_used, consult_booked, is_app_tester")
       .eq("id", session.clientId).maybeSingle()
       .then(({ data }) => { if (data) setClientPackage(data); });
     // Load diary count
@@ -1787,6 +1799,30 @@ function ClientApp({ session, onLogout }) {
         ))}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           <ContactCoachButton clientId={session.clientId} clientPackage={clientPackage?.package} defaultName={session.clientName} />
+          {/* Founding Family feedback button — only visible when is_app_tester is true on this client's record */}
+          {clientPackage?.is_app_tester && (
+            <a
+              href={FEEDBACK_FORM_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                padding: "8px 16px",
+                background: C.gold,
+                color: C.white,
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600,
+                fontFamily: font.body,
+                textDecoration: "none",
+                whiteSpace: "nowrap",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              🧪 Give Feedback
+            </a>
+          )}
           {/* Book a Call button — only for eligible clients */}
           {checkinUnlocked && (
             <a
@@ -2052,6 +2088,11 @@ const BOOKING_URL = "https://calendar.app.google/UJPyiq6md5VCxfuV6";
 const CHECKIN_BOOKING_URL = "https://calendar.app.google/FucJD8hzzv7wdvZS9";
 const DIARY_DAYS_REQUIRED = 5;
 const CHECKIN_UNLOCK_DAYS = 7;
+
+// ── FOUNDING FAMILY APP TESTING ──────────────────────────────────────────────
+// Only shown to clients with is_app_tester = true on their client record.
+// TODO: replace with your live Google Form URL once published.
+const FEEDBACK_FORM_URL = "https://forms.gle/REPLACE_WITH_YOUR_FORM_LINK";
 
 // ── CONTACT COACH BUTTON ─────────────────────────────────────────────────────
 const WHATSAPP_NUMBER = "61494730269"; // no + or spaces — required format for wa.me links
