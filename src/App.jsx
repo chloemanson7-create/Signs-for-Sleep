@@ -2146,8 +2146,7 @@ const CHECKIN_UNLOCK_DAYS = 7;
 
 // ── FOUNDING FAMILY APP TESTING ──────────────────────────────────────────────
 // Only shown to clients with is_app_tester = true on their client record.
-// TODO: replace with your live Google Form URL once published.
-const FEEDBACK_FORM_URL = "https://forms.gle/REPLACE_WITH_YOUR_FORM_LINK";
+const FEEDBACK_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMALaRdK_n1r7WlVgQ2bMedSjztOwu8YqNtxwZf_xzquz8_Q/viewform?usp=header";
 
 // ── CONTACT COACH BUTTON ─────────────────────────────────────────────────────
 const WHATSAPP_NUMBER = "61494730269"; // no + or spaces — required format for wa.me links
