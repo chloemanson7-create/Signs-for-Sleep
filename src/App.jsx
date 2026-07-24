@@ -1856,7 +1856,7 @@ function ClientApp({ session, onLogout }) {
           {/* Founding Family feedback button — only visible when is_app_tester is true on this client's record */}
           {clientPackage?.is_app_tester && (
             <a
-              href={FEEDBACK_FORM_URL}
+              href={https://docs.google.com/forms/d/e/1FAIpQLSfMALaRdK_n1r7WlVgQ2bMedSjztOwu8YqNtxwZf_xzquz8_Q/viewform?usp=publish-editor}
               target="_blank"
               rel="noopener noreferrer"
               style={{
