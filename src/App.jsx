@@ -1221,8 +1221,8 @@ function ClientDetail({ client, onBack, onRefresh }) {
 
   const tabs = [
     { key: "overview", label: "Overview" },
-    { key: "intake", label: "Intake" },
-    { key: "diary", label: "Sleep Diary" },
+    { key: "intake", label: "📃 Questionnaire" },
+    { key: "diary", label: "📖 Sleep Diary" },
     { key: "analysis", label: "📊 Analysis" },
     { key: "plan", label: "📋 Sleep Plan" },
     { key: "progress", label: "🎉 Progress" },
@@ -1805,9 +1805,9 @@ function ClientApp({ session, onLogout }) {
   }, [session.clientId]);
 
   const tabs = [
-    { key: "intake", label: "Questionnaire" },
-    { key: "diary", label: "Sleep Diary" },
-    { key: "package", label: "📦 Your Package" },
+    { key: "intake", label: "📃 Questionnaire" },
+    { key: "diary", label: "📖 Sleep Diary" },
+    { key: "package", label: "🎁 Your Package" },
     { key: "analysis", label: "📊 Analysis" },
     { key: "plan", label: "📋 Sleep Plan" },
     { key: "progress", label: "🎉 Progress" },
