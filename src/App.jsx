@@ -1856,7 +1856,7 @@ function ClientApp({ session, onLogout }) {
           {/* Founding Family feedback button — only visible when is_app_tester is true on this client's record */}
           {clientPackage?.is_app_tester && (
             <a
-              href={https://docs.google.com/forms/d/e/1FAIpQLSfMALaRdK_n1r7WlVgQ2bMedSjztOwu8YqNtxwZf_xzquz8_Q/viewform?usp=publish-editor}
+              href={FEEDBACK_FORM_URL}
               target="_blank"
               rel="noopener noreferrer"
               style={{
@@ -2147,7 +2147,7 @@ const CHECKIN_UNLOCK_DAYS = 7;
 // ── FOUNDING FAMILY APP TESTING ──────────────────────────────────────────────
 // Only shown to clients with is_app_tester = true on their client record.
 // TODO: replace with your live Google Form URL once published.
-const FEEDBACK_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMALaRdK_n1r7WlVgQ2bMedSjztOwu8YqNtxwZf_xzquz8_Q/viewform?usp=header";
+const FEEDBACK_FORM_URL = "https://forms.gle/REPLACE_WITH_YOUR_FORM_LINK";
 
 // ── CONTACT COACH BUTTON ─────────────────────────────────────────────────────
 const WHATSAPP_NUMBER = "61494730269"; // no + or spaces — required format for wa.me links
