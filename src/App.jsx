@@ -1221,8 +1221,8 @@ function ClientDetail({ client, onBack, onRefresh }) {
 
   const tabs = [
     { key: "overview", label: "Overview" },
-    { key: "intake", label: "📃 Questionnaire" },
-    { key: "diary", label: "📖 Sleep Diary" },
+    { key: "intake", label: "Intake" },
+    { key: "diary", label: "Sleep Diary" },
     { key: "analysis", label: "📊 Analysis" },
     { key: "plan", label: "📋 Sleep Plan" },
     { key: "progress", label: "🎉 Progress" },
@@ -1851,7 +1851,7 @@ function ClientApp({ session, onLogout }) {
             {t.label}
           </button>
         ))}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <ContactCoachButton clientId={session.clientId} clientPackage={clientPackage?.package} defaultName={session.clientName} />
           {/* Founding Family feedback button — only visible when is_app_tester is true on this client's record */}
           {clientPackage?.is_app_tester && (
@@ -2146,7 +2146,8 @@ const CHECKIN_UNLOCK_DAYS = 7;
 
 // ── FOUNDING FAMILY APP TESTING ──────────────────────────────────────────────
 // Only shown to clients with is_app_tester = true on their client record.
-const FEEDBACK_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMALaRdK_n1r7WlVgQ2bMedSjztOwu8YqNtxwZf_xzquz8_Q/viewform?usp=header";
+// TODO: replace with your live Google Form URL once published.
+const FEEDBACK_FORM_URL = "https://forms.gle/REPLACE_WITH_YOUR_FORM_LINK";
 
 // ── CONTACT COACH BUTTON ─────────────────────────────────────────────────────
 const WHATSAPP_NUMBER = "61494730269"; // no + or spaces — required format for wa.me links
