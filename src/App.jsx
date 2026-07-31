@@ -2241,6 +2241,7 @@ const calcDetailedWakings = (wakings) => {
 const emptyEntry = () => ({
   wake_time: "", bed_time: "", notes: "",
   routine_start_time: "", into_bed_time: "", asleep_time: "",
+  bedtime_how_fell_asleep: "",
   night_wakings_count: "", night_wakings_notes: "", night_wakings_awake_mins: "",
   night_wakings_mode: "simple", night_wakings: [],
   daytime_notes: "",
@@ -2327,6 +2328,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
       notes: rest.notes || null,
       routine_start_time: rest.routine_start_time || null,
       into_bed_time: rest.into_bed_time || null,
+      bedtime_how_fell_asleep: rest.bedtime_how_fell_asleep || null,
       night_wakings_count: wakingsCount,
       night_wakings_notes: rest.night_wakings_notes || null,
       night_wakings_awake_mins: awakeMins || null,
@@ -2681,6 +2683,12 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
         <div style={{ marginBottom: 12 }}>
           <label style={gStyle.label}>Time went to sleep</label>
           <TimeSelect value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={gStyle.label}>How did they fall asleep?</label>
+          <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={entry.bedtime_how_fell_asleep || ""}
+            placeholder="e.g. fed to sleep, rocked, independently, with dummy..."
+            onChange={(e) => update("bedtime_how_fell_asleep", e.target.value)} disabled={isCoach} />
         </div>
         <div style={{ marginBottom: 12 }}>
           <label style={gStyle.label}>Times woke overnight</label>
