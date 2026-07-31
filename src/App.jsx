@@ -2228,10 +2228,21 @@ const PACKAGES = {
 const EXTENSION = { label: "Extension Week", days: 7, calls: 1, price: "$175" };
 
 const emptyNap = () => ({ start: "", end: "", how_fell_asleep: "", location: "", resettled: "", notes: "" });
+const emptyWaking = () => ({ woke_at: "", back_asleep_at: "" });
+// Sums completed wake→back-asleep pairs to derive a count + total minutes awake.
+// Used when a client chooses to log each night waking individually rather than
+// entering a quick total — keeps night_wakings_count / night_wakings_awake_mins
+// (used everywhere else in the app) populated the same way either method is used.
+const calcDetailedWakings = (wakings) => {
+  const complete = (wakings || []).filter(w => w.woke_at && w.back_asleep_at);
+  const mins = complete.reduce((sum, w) => sum + Math.max(0, diffMins(parseTime(w.woke_at), parseTime(w.back_asleep_at))), 0);
+  return { count: complete.length, mins };
+};
 const emptyEntry = () => ({
   wake_time: "", bed_time: "", notes: "",
   routine_start_time: "", into_bed_time: "", asleep_time: "",
   night_wakings_count: "", night_wakings_notes: "", night_wakings_awake_mins: "",
+  night_wakings_mode: "simple", night_wakings: [],
   daytime_notes: "",
   naps: [emptyNap()],
 });
@@ -2266,7 +2277,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
         .eq("date", selectedDate)
         .maybeSingle();
       if (!cancelled) {
-        setEntry(data ? { ...data, naps: data.naps || [emptyNap()] } : emptyEntry());
+        setEntry(data ? { ...data, naps: data.naps || [emptyNap()], night_wakings: data.night_wakings || [], night_wakings_mode: data.night_wakings_mode || "simple" } : emptyEntry());
         setLoading(false);
       }
     };
@@ -2299,7 +2310,10 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
 
     const tomorrowWake = nextEntry?.wake_time ? nextEntry.wake_time.slice(0, 5) : null;
     const rawNightSleep = calcNightSleep(rest.bed_time, tomorrowWake);
-    const awakeMins = parseInt(rest.night_wakings_awake_mins) || 0;
+    const wakingMode = rest.night_wakings_mode || "simple";
+    const detailed = wakingMode === "detailed" ? calcDetailedWakings(rest.night_wakings) : null;
+    const awakeMins = detailed ? detailed.mins : (parseInt(rest.night_wakings_awake_mins) || 0);
+    const wakingsCount = detailed ? detailed.count : (rest.night_wakings_count || null);
     const nightSleep = rawNightSleep !== null ? Math.max(0, rawNightSleep - awakeMins) : null;
     const total24h = totalNapMins + (nightSleep || 0);
 
@@ -2313,9 +2327,11 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
       notes: rest.notes || null,
       routine_start_time: rest.routine_start_time || null,
       into_bed_time: rest.into_bed_time || null,
-      night_wakings_count: rest.night_wakings_count || null,
+      night_wakings_count: wakingsCount,
       night_wakings_notes: rest.night_wakings_notes || null,
-      night_wakings_awake_mins: rest.night_wakings_awake_mins || null,
+      night_wakings_awake_mins: awakeMins || null,
+      night_wakings_mode: wakingMode,
+      night_wakings: rest.night_wakings || [],
       daytime_notes: rest.daytime_notes || null,
       total_nap_mins: totalNapMins,
       night_sleep_mins: nightSleep,
@@ -2411,6 +2427,37 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
     await doSave(updated, selectedDate);
   };
 
+  const setWakingMode = async (mode) => {
+    // Switching modes clears the other method's data so the two can never both
+    // be filled in and produce a conflicting "time awake overnight" total.
+    const updated = mode === "detailed"
+      ? { ...entry, night_wakings_mode: mode, night_wakings_count: "", night_wakings_awake_mins: "" }
+      : { ...entry, night_wakings_mode: mode, night_wakings: [] };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
+  };
+
+  const updateWaking = async (idx, field, value) => {
+    const night_wakings = (entry.night_wakings || []).map((w, i) => i === idx ? { ...w, [field]: value } : w);
+    const updated = { ...entry, night_wakings };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
+  };
+
+  const addWaking = async () => {
+    const night_wakings = [...(entry.night_wakings || []), emptyWaking()];
+    const updated = { ...entry, night_wakings };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
+  };
+
+  const removeWaking = async (idx) => {
+    const night_wakings = (entry.night_wakings || []).filter((_, i) => i !== idx);
+    const updated = { ...entry, night_wakings };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
+  };
+
   const changeDate = (delta) => {
     setSelectedDate(offsetDate(selectedDate, delta));
   };
@@ -2422,6 +2469,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   const totalNapMins = calcNapMins(entry);
   const nightSleepMins = entry.night_sleep_mins || null;
   const total24h = totalNapMins + (nightSleepMins || 0);
+  const wakingMode = entry.night_wakings_mode || "simple";
+  const detailedWakingTotals = calcDetailedWakings(entry.night_wakings);
   const bookingUnlocked = !isCoach && !consultBooked && diaryCount >= DIARY_DAYS_REQUIRED;
   const daysRemaining = Math.max(0, DIARY_DAYS_REQUIRED - diaryCount);
 
@@ -2633,34 +2682,112 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           <label style={gStyle.label}>Time went to sleep</label>
           <TimeSelect value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 12, marginBottom: 12 }}>
-          <div>
-            <label style={gStyle.label}>Times woke overnight</label>
-            <select style={{ ...gStyle.input, cursor: "pointer" }}
-              value={entry.night_wakings_count || ""}
-              onChange={(e) => update("night_wakings_count", e.target.value)}
-              disabled={isCoach}>
-              <option value="">—</option>
-              {Array.from({ length: 26 }, (_, i) => (
-                <option key={i} value={i}>{i}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label style={gStyle.label}>Total time awake overnight</label>
-            <DurationSelect
-              value={entry.night_wakings_awake_mins}
-              onChange={(v) => update("night_wakings_awake_mins", v)}
+        <div style={{ marginBottom: 12 }}>
+          <label style={gStyle.label}>Times woke overnight</label>
+
+          {/* Mode toggle — only one method's fields are ever active/saved at once */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button
+              onClick={() => !isCoach && setWakingMode("simple")}
               disabled={isCoach}
-              placeholder="Select duration…"
-            />
+              style={{
+                ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12,
+                background: wakingMode === "simple" ? C.terracotta : "transparent",
+                color: wakingMode === "simple" ? C.white : C.terracottaDark,
+                borderColor: C.terracotta,
+              }}>
+              Quick totals
+            </button>
+            <button
+              onClick={() => !isCoach && setWakingMode("detailed")}
+              disabled={isCoach}
+              style={{
+                ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12,
+                background: wakingMode === "detailed" ? C.terracotta : "transparent",
+                color: wakingMode === "detailed" ? C.white : C.terracottaDark,
+                borderColor: C.terracotta,
+              }}>
+              Log each waking
+            </button>
           </div>
-          <div>
-            <label style={gStyle.label}>Night waking notes</label>
-            <input style={gStyle.input} value={entry.night_wakings_notes || ""}
-              placeholder="e.g. awake 2am for 45 min, resettled with feed..."
-              onChange={(e) => update("night_wakings_notes", e.target.value)} disabled={isCoach} style={{ ...gStyle.input, minHeight: 60 }} />
-          </div>
+
+          {wakingMode === "simple" ? (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 12 }}>
+              <div>
+                <label style={gStyle.label}>Number of wakes</label>
+                <select style={{ ...gStyle.input, cursor: "pointer" }}
+                  value={entry.night_wakings_count || ""}
+                  onChange={(e) => update("night_wakings_count", e.target.value)}
+                  disabled={isCoach}>
+                  <option value="">—</option>
+                  {Array.from({ length: 26 }, (_, i) => (
+                    <option key={i} value={i}>{i}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={gStyle.label}>Total time awake overnight</label>
+                <DurationSelect
+                  value={entry.night_wakings_awake_mins}
+                  onChange={(v) => update("night_wakings_awake_mins", v)}
+                  disabled={isCoach}
+                  placeholder="Select duration…"
+                />
+              </div>
+              <div>
+                <label style={gStyle.label}>Night waking notes</label>
+                <input style={{ ...gStyle.input, minHeight: 60 }} value={entry.night_wakings_notes || ""}
+                  placeholder="e.g. awake 2am for 45 min, resettled with feed..."
+                  onChange={(e) => update("night_wakings_notes", e.target.value)} disabled={isCoach} />
+              </div>
+            </div>
+          ) : (
+            <div>
+              {(entry.night_wakings || []).map((w, idx) => {
+                const dur = w.woke_at && w.back_asleep_at
+                  ? diffMins(parseTime(w.woke_at), parseTime(w.back_asleep_at)) : null;
+                return (
+                  <div key={idx} style={{ borderTop: idx > 0 ? `1px solid ${C.border}` : "none", paddingTop: idx > 0 ? 12 : 0, marginTop: idx > 0 ? 12 : 0 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <span style={{ fontWeight: 700, fontSize: 13, color: C.mid }}>Waking {idx + 1}</span>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        {dur !== null && <span style={gStyle.tag(C.blue, C.blueLight)}>{fmtDuration(dur)}</span>}
+                        {!isCoach && (
+                          <button onClick={() => removeWaking(idx)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16 }}>×</button>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <div>
+                        <label style={gStyle.label}>Woke at</label>
+                        <TimeSelect value={w.woke_at} onChange={(v) => updateWaking(idx, "woke_at", v)} disabled={isCoach} placeholder="Time…" />
+                      </div>
+                      <div>
+                        <label style={gStyle.label}>Back asleep at</label>
+                        <TimeSelect value={w.back_asleep_at} onChange={(v) => updateWaking(idx, "back_asleep_at", v)} disabled={isCoach} placeholder="Time…" />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {!isCoach && (
+                <button style={{ ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12, marginTop: (entry.night_wakings || []).length ? 12 : 0 }} onClick={addWaking}>
+                  + Add waking
+                </button>
+              )}
+              {detailedWakingTotals.count > 0 && (
+                <p style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>
+                  {detailedWakingTotals.count} waking{detailedWakingTotals.count !== 1 ? "s" : ""} · {fmtDuration(detailedWakingTotals.mins)} total time awake
+                </p>
+              )}
+              <div style={{ marginTop: 12 }}>
+                <label style={gStyle.label}>Night waking notes</label>
+                <input style={{ ...gStyle.input, minHeight: 60 }} value={entry.night_wakings_notes || ""}
+                  placeholder="e.g. awake 2am for 45 min, resettled with feed..."
+                  onChange={(e) => update("night_wakings_notes", e.target.value)} disabled={isCoach} />
+              </div>
+            </div>
+          )}
         </div>
         <label style={gStyle.label}>General notes</label>
         <textarea style={{ ...gStyle.input, minHeight: 80, resize: "vertical" }}
