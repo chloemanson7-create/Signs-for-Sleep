@@ -192,6 +192,33 @@ const fmtDuration = (mins) => {
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
 };
+
+// Flips a 24-hour "HH:MM" between AM and PM (09:15 <-> 21:15).
+const flipAmPm = (t) => {
+  const mins = parseTime(t);
+  if (mins === null) return null;
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return `${String((h + 12) % 24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+};
+
+// A mistyped AM/PM shows up as a duration that silently wraps past midnight —
+// e.g. 12:35 PM to 1:08 AM reads as a 12h 33m "nap". Rather than guess and
+// change the data, this returns a flag plus the correction that WOULD make it
+// plausible, so the parent can confirm with one tap. Returns null when the
+// duration is unremarkable.
+const implausibleDuration = (start, end, maxMins) => {
+  if (!start || !end) return null;
+  const dur = diffMins(parseTime(start), parseTime(end));
+  if (dur <= maxMins) return null;
+  // Try flipping each side; a single flip that lands in a sensible range is
+  // almost always what was meant.
+  const candidates = [
+    { fixField: "end",   fixValue: flipAmPm(end),   dur: diffMins(parseTime(start), parseTime(flipAmPm(end))) },
+    { fixField: "start", fixValue: flipAmPm(start), dur: diffMins(parseTime(flipAmPm(start)), parseTime(end)) },
+  ].filter(c => c.fixValue && c.dur > 0 && c.dur <= maxMins);
+  candidates.sort((a, b) => a.dur - b.dur);
+  return { dur, suggestion: candidates[0] || null };
+};
 const today = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -419,6 +446,18 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
   // "1200" into "01:200" (a 3-digit commit fired, then overwrote the draft).
   const manualFocused = useRef(false);
   const wrapRef = useRef(null);
+  // The panel has a 220px minimum width, but in the two-column nap grid each
+  // field is only about half the screen. Anchored left, the right-hand field's
+  // panel therefore spills past the viewport edge — which is what made the page
+  // appear zoomed/scrolled sideways. When there isn't room to the right, anchor
+  // the panel to the field's right edge so it opens inward instead.
+  const [alignRight, setAlignRight] = useState(false);
+  useEffect(() => {
+    if (!open || !wrapRef.current) return;
+    const rect = wrapRef.current.getBoundingClientRect();
+    const PANEL_MIN = 220;
+    setAlignRight(rect.left + Math.max(PANEL_MIN, rect.width) > window.innerWidth - 8);
+  }, [open]);
 
   // Sync when external value changes (loading saved data)
   useEffect(() => {
@@ -520,13 +559,15 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
 
       {open && (
         <div style={{
-          position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 9999,
+          position: "absolute", top: "calc(100% + 6px)", zIndex: 9999,
+          ...(alignRight ? { right: 0 } : { left: 0 }),
           background: "#FFFFFF",
           border: "1px solid rgba(196,113,74,0.25)",
           borderRadius: 14,
           boxShadow: "0 12px 40px rgba(44,36,32,0.18)",
           padding: "8px 8px 10px",
           width: "100%", minWidth: 220,
+          maxWidth: "calc(100vw - 16px)", boxSizing: "border-box",
         }}>
           {/* Mode toggle — display preference only. Both modes edit the same
               underlying HH:MM value, so switching never clears anything. */}
@@ -649,6 +690,14 @@ function DurationSelect({ value, onChange, disabled, placeholder }) {
   const [m,    setM]    = useState(init.m);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
+  // Same viewport-overflow guard as TimeSelect — see the comment there.
+  const [alignRight, setAlignRight] = useState(false);
+  useEffect(() => {
+    if (!open || !wrapRef.current) return;
+    const rect = wrapRef.current.getBoundingClientRect();
+    const PANEL_MIN = 220;
+    setAlignRight(rect.left + Math.max(PANEL_MIN, rect.width) > window.innerWidth - 8);
+  }, [open]);
 
   // Sync when external value changes (loading saved data)
   useEffect(() => {
@@ -702,13 +751,15 @@ function DurationSelect({ value, onChange, disabled, placeholder }) {
 
       {open && (
         <div style={{
-          position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 9999,
+          position: "absolute", top: "calc(100% + 6px)", zIndex: 9999,
+          ...(alignRight ? { right: 0 } : { left: 0 }),
           background: "#FFFFFF",
           border: "1px solid rgba(196,113,74,0.25)",
           borderRadius: 14,
           boxShadow: "0 12px 40px rgba(44,36,32,0.18)",
           padding: "8px 8px 10px",
           width: "100%", minWidth: 220,
+          maxWidth: "calc(100vw - 16px)", boxSizing: "border-box",
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
             <WheelColumn
@@ -2299,6 +2350,9 @@ const BOOKING_URL = "https://calendar.app.google/UJPyiq6md5VCxfuV6";
 const CHECKIN_BOOKING_URL = "https://calendar.app.google/FucJD8hzzv7wdvZS9";
 const DIARY_DAYS_REQUIRED = 5;
 const CHECKIN_UNLOCK_DAYS = 7;
+// Above these, a duration is far more likely to be an AM/PM slip than real.
+const NAP_MAX_PLAUSIBLE_MINS = 240;    // 4h
+const WAKING_MAX_PLAUSIBLE_MINS = 300; // 5h
 
 // ── FOUNDING FAMILY APP TESTING ──────────────────────────────────────────────
 // Only shown to clients with is_app_tester = true on their client record.
@@ -2740,6 +2794,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
         {(entry.naps || []).map((nap, idx) => {
           const dur = nap.start && nap.end
             ? diffMins(parseTime(nap.start), parseTime(nap.end)) : null;
+          // Naps longer than 4h are almost always an AM/PM slip rather than a
+          // real nap, and left unnoticed they badly skew the 24h sleep total.
+          const napFlag = implausibleDuration(nap.start, nap.end, NAP_MAX_PLAUSIBLE_MINS);
           const ww = idx === 0 && entry.wake_time && nap.start
             ? diffMins(parseTime(entry.wake_time), parseTime(nap.start)) : null;
           const prevNapEnd = idx > 0 && entry.naps[idx - 1]?.end ? entry.naps[idx - 1].end : null;
@@ -2772,6 +2829,30 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                   <TimeSelect value={nap.end} onChange={(v) => updateNap(idx, "end", v)} disabled={isCoach} placeholder="End…" />
                 </div>
               </div>
+              {napFlag && (
+                <div style={{
+                  background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
+                  padding: "10px 12px", marginBottom: 10, fontSize: 12.5, color: "#6B4A1F",
+                }}>
+                  <strong>⚠️ That's a {fmtDuration(napFlag.dur)} nap — is that right?</strong>
+                  <div style={{ marginTop: 4, lineHeight: 1.45 }}>
+                    {napFlag.suggestion
+                      ? <>This nap runs into the next day. If you meant <strong>{to12hLabel(napFlag.suggestion.fixValue)}</strong> for the {napFlag.suggestion.fixField === "end" ? "end" : "start"} time, the nap would be {fmtDuration(napFlag.suggestion.dur)}.</>
+                      : <>This nap runs past midnight into the next day. Please double-check the AM/PM on both times.</>}
+                  </div>
+                  {napFlag.suggestion && !isCoach && (
+                    <button
+                      onClick={() => updateNap(idx, napFlag.suggestion.fixField, napFlag.suggestion.fixValue)}
+                      style={{
+                        marginTop: 8, padding: "6px 12px", borderRadius: 7,
+                        border: "1px solid #C4714A", background: "#C4714A", color: "#FFFFFF",
+                        fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font.body,
+                      }}>
+                      Change to {to12hLabel(napFlag.suggestion.fixValue)}
+                    </button>
+                  )}
+                </div>
+              )}
               <div style={{ marginBottom: 10 }}>
                 <label style={gStyle.label}>How did they fall asleep?</label>
                 <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={nap.how_fell_asleep || ""}
@@ -2910,6 +2991,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
               {(entry.night_wakings || []).map((w, idx) => {
                 const dur = w.woke_at && w.back_asleep_at
                   ? diffMins(parseTime(w.woke_at), parseTime(w.back_asleep_at)) : null;
+                const wakeFlag = implausibleDuration(w.woke_at, w.back_asleep_at, WAKING_MAX_PLAUSIBLE_MINS);
                 return (
                   <div key={idx} style={{ borderTop: idx > 0 ? `1px solid ${C.border}` : "none", paddingTop: idx > 0 ? 12 : 0, marginTop: idx > 0 ? 12 : 0 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -2931,6 +3013,30 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                         <TimeSelect value={w.back_asleep_at} onChange={(v) => updateWaking(idx, "back_asleep_at", v)} disabled={isCoach} placeholder="Time…" />
                       </div>
                     </div>
+                    {wakeFlag && (
+                      <div style={{
+                        background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
+                        padding: "10px 12px", marginTop: 10, fontSize: 12.5, color: "#6B4A1F",
+                      }}>
+                        <strong>⚠️ That's {fmtDuration(wakeFlag.dur)} awake — is that right?</strong>
+                        {wakeFlag.suggestion && (
+                          <div style={{ marginTop: 4, lineHeight: 1.45 }}>
+                            If you meant <strong>{to12hLabel(wakeFlag.suggestion.fixValue)}</strong>, it would be {fmtDuration(wakeFlag.suggestion.dur)}.
+                          </div>
+                        )}
+                        {wakeFlag.suggestion && !isCoach && (
+                          <button
+                            onClick={() => updateWaking(idx, wakeFlag.suggestion.fixField === "end" ? "back_asleep_at" : "woke_at", wakeFlag.suggestion.fixValue)}
+                            style={{
+                              marginTop: 8, padding: "6px 12px", borderRadius: 7,
+                              border: "1px solid #C4714A", background: "#C4714A", color: "#FFFFFF",
+                              fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font.body,
+                            }}>
+                            Change to {to12hLabel(wakeFlag.suggestion.fixValue)}
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
