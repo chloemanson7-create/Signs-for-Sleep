@@ -229,6 +229,14 @@ function parse24ToWheel(t) {
   return { h: h12, m, ampm };
 }
 
+// Gets the device's current time in HH:MM 24-hour format
+const getCurrentTime = () => {
+  const now = new Date();
+  const h = String(now.getHours()).padStart(2, "0");
+  const m = String(now.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+};
+
 function wheelTo24(h, m, ampm) {
   if (h === null || m === null || !ampm) return "";
   let h24 = parseInt(h);
@@ -236,6 +244,29 @@ function wheelTo24(h, m, ampm) {
   if (ampm === "pm" && h24 !== 12) h24 += 12;
   return `${String(h24).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
 }
+
+// Parses free-typed 24-hour text into a canonical "HH:MM" string.
+// Deliberately permissive about separators/padding ("930", "9:30", "09.30" all
+// work) but strict about the resulting range, so an out-of-range or half-typed
+// entry returns null and is simply never committed — the previously saved value
+// stays untouched rather than being overwritten with something invalid.
+const parseManual24 = (raw) => {
+  if (!raw) return null;
+  const digits = String(raw).replace(/[^0-9]/g, "");
+  if (digits.length !== 3 && digits.length !== 4) return null;
+  const h = parseInt(digits.slice(0, digits.length - 2), 10);
+  const m = parseInt(digits.slice(-2), 10);
+  if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+};
+
+// Renders a 24-hour "HH:MM" value back as friendly 12-hour text, used for the
+// read-back confirmation line under the manual input.
+const to12hLabel = (t) => {
+  const p = parse24ToWheel(t);
+  if (p.h === null) return "";
+  return `${p.h}:${String(p.m).padStart(2, "0")} ${p.ampm.toUpperCase()}`;
+};
 
 // Scroll-wheel column used by TimeSelect and DurationSelect.
 // circular=true (default) makes it wrap infinitely (12→1→...→11→12, etc) by
@@ -357,17 +388,27 @@ function WheelColumn({ items, selected, onSelect, circular = true }) {
 }
 
 function TimeSelect({ value, onChange, disabled, placeholder }) {
-  const init = parse24ToWheel(value);
+  // When opening with empty value, default to current device time instead of nulls
+  const init = parse24ToWheel(value || getCurrentTime());
   const [h,    setH]    = useState(init.h);
   const [m,    setM]    = useState(init.m);
   const [ampm, setAmpm] = useState(init.ampm || "am");
   const [open, setOpen] = useState(false);
+  // "wheel" | "manual" — purely a display preference for this picker. Both modes
+  // read from and write to the same HH:MM value, so switching never alters or
+  // clears what's already saved; it only changes how the value is edited.
+  const [mode, setMode] = useState("wheel");
+  // Draft text for the manual box. Held separately so half-typed input ("9",
+  // "93") stays local and is never pushed to onChange — only a fully valid time
+  // is ever committed, leaving any existing saved value intact until then.
+  const [manualDraft, setManualDraft] = useState(value ? value.slice(0, 5) : "");
   const wrapRef = useRef(null);
 
   // Sync when external value changes (loading saved data)
   useEffect(() => {
     const p = parse24ToWheel(value);
     if (p.h !== null) { setH(p.h); setM(p.m); setAmpm(p.ampm); }
+    setManualDraft(value ? value.slice(0, 5) : "");
   }, [value]);
 
   // Close on outside click
@@ -395,9 +436,21 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
     if (result) onChange(result);
   };
 
-  const label = h !== null && m !== null
-    ? `${h}:${String(m).padStart(2,"0")} ${ampm.toUpperCase()}`
-    : placeholder || "Select time…";
+  // Commits the manual box only if it parses to a real 24-hour time. Anything
+  // else (half-typed, out of range) is left alone so the saved value survives.
+  const commitManual = (raw) => {
+    setManualDraft(raw);
+    const parsed = parseManual24(raw);
+    if (parsed && parsed !== value) onChange(parsed);
+  };
+
+  const manualParsed = parseManual24(manualDraft);
+  const manualInvalid = manualDraft.trim() !== "" && !manualParsed;
+
+  // Derived from the saved value, NOT the wheel state — the wheels pre-seed to
+  // the current device time so they open somewhere useful, but an untouched
+  // picker must still read as empty rather than appearing to hold a time.
+  const label = value ? to12hLabel(value) : (placeholder || "Select time…");
 
   return (
     <div ref={wrapRef} style={{ position: "relative" }}>
@@ -412,7 +465,7 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
           fontFamily: "'DM Sans', system-ui, sans-serif",
           fontSize: 14,
           background: disabled ? "#FAF7F2" : "#FFFFFF",
-          color: h !== null ? "#2C2420" : "#9E8E88",
+          color: value ? "#2C2420" : "#9E8E88",
           outline: "none", cursor: disabled ? "default" : "pointer",
           textAlign: "left", display: "flex",
           alignItems: "center", justifyContent: "space-between",
@@ -433,25 +486,84 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
           padding: "8px 8px 10px",
           width: "100%", minWidth: 220,
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-            <WheelColumn
-              items={WHEEL_HOURS}
-              selected={h !== null ? String(h) : null}
-              onSelect={(v) => handle("h", parseInt(v))}
-            />
-            <div style={{ color: "#9E8E88", fontSize: 20, fontWeight: 700, paddingBottom: 2 }}>:</div>
-            <WheelColumn
-              items={WHEEL_MINS}
-              selected={m !== null ? String(m).padStart(2,"0") : null}
-              onSelect={(v) => handle("m", parseInt(v))}
-            />
-            <WheelColumn
-              items={WHEEL_AMPM}
-              selected={ampm}
-              onSelect={(v) => handle("ampm", v)}
-              circular={false}
-            />
+          {/* Mode toggle — display preference only. Both modes edit the same
+              underlying HH:MM value, so switching never clears anything. */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {[["wheel", "Time wheel"], ["manual", "Type it in"]].map(([key, text]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setMode(key)}
+                style={{
+                  flex: 1, padding: "6px 8px", borderRadius: 7,
+                  border: "1px solid #C4714A",
+                  background: mode === key ? "#C4714A" : "transparent",
+                  color: mode === key ? "#FFFFFF" : "#8A4B2A",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  fontFamily: "'DM Sans', system-ui, sans-serif",
+                }}
+              >
+                {text}
+              </button>
+            ))}
           </div>
+
+          {mode === "wheel" ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+              <WheelColumn
+                items={WHEEL_HOURS}
+                selected={h !== null ? String(h) : null}
+                onSelect={(v) => handle("h", parseInt(v))}
+              />
+              <div style={{ color: "#9E8E88", fontSize: 20, fontWeight: 700, paddingBottom: 2 }}>:</div>
+              <WheelColumn
+                items={WHEEL_MINS}
+                selected={m !== null ? String(m).padStart(2,"0") : null}
+                onSelect={(v) => handle("m", parseInt(v))}
+              />
+              <WheelColumn
+                items={WHEEL_AMPM}
+                selected={ampm}
+                onSelect={(v) => handle("ampm", v)}
+                circular={false}
+              />
+            </div>
+          ) : (
+            <div style={{ padding: "4px 4px 2px" }}>
+              <label style={{
+                display: "block", fontSize: 11, fontWeight: 600, letterSpacing: 0.3,
+                color: "#9E8E88", marginBottom: 5, textTransform: "uppercase",
+                fontFamily: "'DM Sans', system-ui, sans-serif",
+              }}>
+                24-hour time
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={manualDraft}
+                onChange={(e) => commitManual(e.target.value)}
+                placeholder="e.g. 07:00, 13:30, 19:45"
+                style={{
+                  width: "100%", padding: "10px 12px", boxSizing: "border-box",
+                  border: `1px solid ${manualInvalid ? "#B4453A" : "rgba(196,113,74,0.35)"}`,
+                  borderRadius: 8, fontSize: 16, letterSpacing: 1,
+                  fontFamily: "'DM Sans', system-ui, sans-serif",
+                  color: "#2C2420", outline: "none",
+                }}
+              />
+              {/* Read-back line: the AM/PM safeguard. Typing 24-hour removes the
+                  ambiguity at entry, and this confirms how it was understood. */}
+              <div style={{ marginTop: 7, fontSize: 12, minHeight: 17, fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+                {manualParsed ? (
+                  <span style={{ color: "#4A7C59", fontWeight: 600 }}>✓ {to12hLabel(manualParsed)}</span>
+                ) : manualInvalid ? (
+                  <span style={{ color: "#B4453A" }}>Enter a time between 00:00 and 23:59</span>
+                ) : (
+                  <span style={{ color: "#9E8E88" }}>Midnight is 00:00 · midday is 12:00</span>
+                )}
+              </div>
+            </div>
+          )}
           <button
             onClick={() => setOpen(false)}
             style={{
