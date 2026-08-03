@@ -250,12 +250,24 @@ function wheelTo24(h, m, ampm) {
 // work) but strict about the resulting range, so an out-of-range or half-typed
 // entry returns null and is simply never committed — the previously saved value
 // stays untouched rather than being overwritten with something invalid.
-const parseManual24 = (raw) => {
+// allowHourOnly lets 1–2 digits mean a whole hour ("12" -> 12:00). That's only
+// safe once the client has finished typing, so it's used for the preview line
+// and the on-blur commit, never for the as-you-type commit (where "12" is far
+// more likely to be halfway to "12:30" than a finished entry).
+const parseManual24 = (raw, { allowHourOnly = false } = {}) => {
   if (!raw) return null;
   const digits = String(raw).replace(/[^0-9]/g, "");
-  if (digits.length !== 3 && digits.length !== 4) return null;
-  const h = parseInt(digits.slice(0, digits.length - 2), 10);
-  const m = parseInt(digits.slice(-2), 10);
+  let h, m;
+  if (digits.length === 1 || digits.length === 2) {
+    if (!allowHourOnly) return null;
+    h = parseInt(digits, 10);
+    m = 0;
+  } else if (digits.length === 3 || digits.length === 4) {
+    h = parseInt(digits.slice(0, digits.length - 2), 10);
+    m = parseInt(digits.slice(-2), 10);
+  } else {
+    return null;
+  }
   if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 };
@@ -402,22 +414,33 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
   // "93") stays local and is never pushed to onChange — only a fully valid time
   // is ever committed, leaving any existing saved value intact until then.
   const [manualDraft, setManualDraft] = useState(value ? value.slice(0, 5) : "");
+  // True while the manual box has focus. While the client is mid-type, the sync
+  // effect below must NOT rewrite what they've typed — doing so was what turned
+  // "1200" into "01:200" (a 3-digit commit fired, then overwrote the draft).
+  const manualFocused = useRef(false);
   const wrapRef = useRef(null);
 
   // Sync when external value changes (loading saved data)
   useEffect(() => {
     const p = parse24ToWheel(value);
     if (p.h !== null) { setH(p.h); setM(p.m); setAmpm(p.ampm); }
-    setManualDraft(value ? value.slice(0, 5) : "");
+    if (!manualFocused.current) setManualDraft(value ? value.slice(0, 5) : "");
   }, [value]);
 
   // Close on outside click
   useEffect(() => {
     if (!open) return;
-    const fn = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const fn = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        // Commit anything pending in the manual box first — clicking away
+        // unmounts the input, so blur can't be relied on to fire here.
+        if (manualFocused.current) onManualBlur();
+        setOpen(false);
+      }
+    };
     document.addEventListener("mousedown", fn);
     return () => document.removeEventListener("mousedown", fn);
-  }, [open]);
+  }, [open, manualDraft, value]);
 
   // Only fires when a wheel is genuinely touched (click or scroll-settle).
   // At that moment, any OTHER wheel that's still untouched (null) commits to
@@ -436,15 +459,34 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
     if (result) onChange(result);
   };
 
-  // Commits the manual box only if it parses to a real 24-hour time. Anything
-  // else (half-typed, out of range) is left alone so the saved value survives.
-  const commitManual = (raw) => {
+  // While typing, only a complete 4-digit time commits. A 3-digit string like
+  // "120" is ambiguous — it's a valid 1:20, but far more often it's someone
+  // halfway through "1200" — so it's left alone until they finish or move on.
+  const onManualType = (raw) => {
     setManualDraft(raw);
-    const parsed = parseManual24(raw);
-    if (parsed && parsed !== value) onChange(parsed);
+    const digits = String(raw).replace(/[^0-9]/g, "");
+    if (digits.length === 4) {
+      const parsed = parseManual24(raw);
+      if (parsed && parsed !== value) onChange(parsed);
+    }
   };
 
-  const manualParsed = parseManual24(manualDraft);
+  // On blur the entry is finished, so shorter forms are safe to accept:
+  // "730" -> 07:30, "12" -> 12:00. The box is then normalised to "HH:MM".
+  const onManualBlur = () => {
+    manualFocused.current = false;
+    const parsed = parseManual24(manualDraft, { allowHourOnly: true });
+    if (parsed) {
+      setManualDraft(parsed);
+      if (parsed !== value) onChange(parsed);
+    } else {
+      // Unparseable — restore whatever was actually saved rather than leaving
+      // stray text sitting in the box looking like it was accepted.
+      setManualDraft(value ? value.slice(0, 5) : "");
+    }
+  };
+
+  const manualParsed = parseManual24(manualDraft, { allowHourOnly: true });
   const manualInvalid = manualDraft.trim() !== "" && !manualParsed;
 
   // Derived from the saved value, NOT the wheel state — the wheels pre-seed to
@@ -541,7 +583,9 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
                 type="text"
                 inputMode="numeric"
                 value={manualDraft}
-                onChange={(e) => commitManual(e.target.value)}
+                onChange={(e) => onManualType(e.target.value)}
+                onFocus={() => { manualFocused.current = true; }}
+                onBlur={onManualBlur}
                 placeholder="e.g. 07:00, 13:30, 19:45"
                 style={{
                   width: "100%", padding: "10px 12px", boxSizing: "border-box",
