@@ -219,6 +219,41 @@ const implausibleDuration = (start, end, maxMins) => {
   candidates.sort((a, b) => a.dur - b.dur);
   return { dur, suggestion: candidates[0] || null };
 };
+
+// Night-specific version of the check above. Unlike a same-day nap, flipping
+// EITHER the bed_time or the wake_time by 12h produces the exact same
+// "fixed" duration (shifting either side of a difference by 12h changes the
+// mod-24h result by the same amount either way), so duration alone can never
+// tell us which field was actually mistyped — always defaulting to "fix the
+// second field" would keep suggesting the wrong one. Instead this leans on
+// what time of day each field is: bedtimes are almost always PM/evening (or
+// just after midnight), wake times are almost always AM/morning. Whichever
+// entered value sits outside its expected half of the day is the one this
+// suggests changing.
+const implausibleNightDuration = (bedTime, wakeTime, maxMins) => {
+  if (!bedTime || !wakeTime) return null;
+  const dur = diffMins(parseTime(bedTime), parseTime(wakeTime));
+  if (dur <= maxMins) return null;
+  const candidates = [
+    { fixField: "start", fixValue: flipAmPm(bedTime),  dur: diffMins(parseTime(flipAmPm(bedTime)), parseTime(wakeTime)) },
+    { fixField: "end",   fixValue: flipAmPm(wakeTime), dur: diffMins(parseTime(bedTime), parseTime(flipAmPm(wakeTime))) },
+  ].filter(c => c.fixValue && c.dur > 0 && c.dur <= maxMins);
+  if (candidates.length === 0) return { dur, suggestion: null };
+  const bedHour = Math.floor(parseTime(bedTime) / 60);
+  const wakeHour = Math.floor(parseTime(wakeTime) / 60);
+  const bedLooksWrong = bedHour >= 4 && bedHour < 12;   // entered as morning hours — unusual for a bedtime
+  const wakeLooksWrong = wakeHour >= 12;                // entered as afternoon/evening hours — unusual for a wake time
+  let suggestion;
+  if (bedLooksWrong && !wakeLooksWrong) {
+    suggestion = candidates.find(c => c.fixField === "start") || candidates[0];
+  } else if (wakeLooksWrong && !bedLooksWrong) {
+    suggestion = candidates.find(c => c.fixField === "end") || candidates[0];
+  } else {
+    // Genuinely ambiguous (both or neither look off) — fall back to shortest resulting duration.
+    suggestion = [...candidates].sort((a, b) => a.dur - b.dur)[0];
+  }
+  return { dur, suggestion };
+};
 const today = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -2725,8 +2760,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   const totalNapMins = calcNapMins(entry);
   // Same AM/PM-slip detection as naps, applied to the night pairing: yesterday's
   // bed_time -> today's wake_time, and today's bed_time -> tomorrow's wake_time.
-  const wakeFlag = implausibleDuration(adjTimes.prevBedTime, entry.wake_time, NIGHT_MAX_PLAUSIBLE_MINS);
-  const bedFlag = implausibleDuration(entry.bed_time, adjTimes.nextWakeTime, NIGHT_MAX_PLAUSIBLE_MINS);
+  const wakeFlag = implausibleNightDuration(adjTimes.prevBedTime, entry.wake_time, NIGHT_MAX_PLAUSIBLE_MINS);
+  const bedFlag = implausibleNightDuration(entry.bed_time, adjTimes.nextWakeTime, NIGHT_MAX_PLAUSIBLE_MINS);
   const nightSleepMins = entry.night_sleep_mins || null;
   const total24h = totalNapMins + (nightSleepMins || 0);
   const wakingMode = entry.night_wakings_mode || "simple";
