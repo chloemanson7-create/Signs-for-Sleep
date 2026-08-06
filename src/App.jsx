@@ -2353,6 +2353,7 @@ const CHECKIN_UNLOCK_DAYS = 7;
 // Above these, a duration is far more likely to be an AM/PM slip than real.
 const NAP_MAX_PLAUSIBLE_MINS = 240;    // 4h
 const WAKING_MAX_PLAUSIBLE_MINS = 300; // 5h
+const NIGHT_MAX_PLAUSIBLE_MINS = 840;  // 14h — flags a bed_time/wake_time pair that's likely an AM/PM slip
 
 // ── FOUNDING FAMILY APP TESTING ──────────────────────────────────────────────
 // Only shown to clients with is_app_tester = true on their client record.
@@ -2465,6 +2466,10 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
   const [diaryCount, setDiaryCount] = useState(0);
+  // Neighbouring days' bed/wake times — lets an AM/PM slip on either side of
+  // a night's sleep be flagged the moment the pairing is complete, whichever
+  // day that happens to be entered on.
+  const [adjTimes, setAdjTimes] = useState({ prevBedTime: null, nextWakeTime: null });
 
   const loadDiaryCount = async () => {
     const { count } = await supabase
@@ -2487,8 +2492,20 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
         .eq("client_id", clientId)
         .eq("date", selectedDate)
         .maybeSingle();
+      // Also grab yesterday's bed_time and tomorrow's wake_time (if logged) so
+      // the night-duration warning can catch an AM/PM slip on either side.
+      const [{ data: prevDay }, { data: nextDay }] = await Promise.all([
+        supabase.from("sleep_diary").select("bed_time")
+          .eq("client_id", clientId).eq("date", offsetDate(selectedDate, -1)).maybeSingle(),
+        supabase.from("sleep_diary").select("wake_time")
+          .eq("client_id", clientId).eq("date", offsetDate(selectedDate, +1)).maybeSingle(),
+      ]);
       if (!cancelled) {
         setEntry(data ? { ...data, naps: data.naps || [emptyNap()], night_wakings: data.night_wakings || [], night_wakings_mode: data.night_wakings_mode || "simple" } : emptyEntry());
+        setAdjTimes({
+          prevBedTime: prevDay?.bed_time ? prevDay.bed_time.slice(0, 5) : null,
+          nextWakeTime: nextDay?.wake_time ? nextDay.wake_time.slice(0, 5) : null,
+        });
         setLoading(false);
       }
     };
@@ -2618,6 +2635,33 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
     await doSave(updated, selectedDate);
   };
 
+  // The night-duration warning can point at a field that lives on a
+  // *different* day's entry (e.g. today's wake time is fine, but yesterday's
+  // bed_time looks like an AM/PM slip). These apply that fix directly to the
+  // neighbouring day's row, then re-run today's doSave so the night-sleep
+  // total is recalculated with the corrected value.
+  const fixYesterdayBedTime = async (newValue) => {
+    const prevDateStr = offsetDate(selectedDate, -1);
+    const { data: prevEntry } = await supabase
+      .from("sleep_diary").select("id")
+      .eq("client_id", clientId).eq("date", prevDateStr).maybeSingle();
+    if (!prevEntry?.id) return;
+    await supabase.from("sleep_diary").update({ bed_time: newValue }).eq("id", prevEntry.id);
+    setAdjTimes(prev => ({ ...prev, prevBedTime: newValue }));
+    await doSave(entry, selectedDate);
+  };
+
+  const fixTomorrowWakeTime = async (newValue) => {
+    const nextDateStr = offsetDate(selectedDate, +1);
+    const { data: nextEntry } = await supabase
+      .from("sleep_diary").select("id")
+      .eq("client_id", clientId).eq("date", nextDateStr).maybeSingle();
+    if (!nextEntry?.id) return;
+    await supabase.from("sleep_diary").update({ wake_time: newValue }).eq("id", nextEntry.id);
+    setAdjTimes(prev => ({ ...prev, nextWakeTime: newValue }));
+    await doSave(entry, selectedDate);
+  };
+
   const updateNap = async (idx, field, value) => {
     const naps = entry.naps.map((n, i) => i === idx ? { ...n, [field]: value } : n);
     const updated = { ...entry, naps };
@@ -2679,6 +2723,10 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   if (loading || !entry) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
 
   const totalNapMins = calcNapMins(entry);
+  // Same AM/PM-slip detection as naps, applied to the night pairing: yesterday's
+  // bed_time -> today's wake_time, and today's bed_time -> tomorrow's wake_time.
+  const wakeFlag = implausibleDuration(adjTimes.prevBedTime, entry.wake_time, NIGHT_MAX_PLAUSIBLE_MINS);
+  const bedFlag = implausibleDuration(entry.bed_time, adjTimes.nextWakeTime, NIGHT_MAX_PLAUSIBLE_MINS);
   const nightSleepMins = entry.night_sleep_mins || null;
   const total24h = totalNapMins + (nightSleepMins || 0);
   const wakingMode = entry.night_wakings_mode || "simple";
@@ -2781,6 +2829,34 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
         <p style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>Enter times in 24hr format — e.g. 07:00, 13:30, 19:45</p>
         <label style={gStyle.label}>Wake time</label>
         <TimeSelect value={entry.wake_time} onChange={(v) => update("wake_time", v)} disabled={isCoach} placeholder="Select wake time…" />
+        {wakeFlag && (
+          <div style={{
+            background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
+            padding: "10px 12px", marginTop: 10, fontSize: 12.5, color: "#6B4A1F",
+          }}>
+            <strong>⚠️ That's a {fmtDuration(wakeFlag.dur)} night — is that right?</strong>
+            <div style={{ marginTop: 4, lineHeight: 1.45 }}>
+              {wakeFlag.suggestion
+                ? (wakeFlag.suggestion.fixField === "end"
+                    ? <>If you meant <strong>{to12hLabel(wakeFlag.suggestion.fixValue)}</strong> for this wake time, last night would be {fmtDuration(wakeFlag.suggestion.dur)}.</>
+                    : <>If yesterday's bedtime was actually <strong>{to12hLabel(wakeFlag.suggestion.fixValue)}</strong>, last night would be {fmtDuration(wakeFlag.suggestion.dur)}.</>)
+                : <>Please double-check the AM/PM on yesterday's bedtime and this wake time.</>}
+            </div>
+            {wakeFlag.suggestion && !isCoach && (
+              <button
+                onClick={() => wakeFlag.suggestion.fixField === "end"
+                  ? update("wake_time", wakeFlag.suggestion.fixValue)
+                  : fixYesterdayBedTime(wakeFlag.suggestion.fixValue)}
+                style={{
+                  marginTop: 8, padding: "6px 12px", borderRadius: 7,
+                  border: "1px solid #C4714A", background: "#C4714A", color: "#FFFFFF",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font.body,
+                }}>
+                Change {wakeFlag.suggestion.fixField === "end" ? "wake time" : "yesterday's bedtime"} to {to12hLabel(wakeFlag.suggestion.fixValue)}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Naps */}
@@ -2920,6 +2996,34 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
         <div style={{ marginBottom: 12 }}>
           <label style={gStyle.label}>Time went to sleep</label>
           <TimeSelect value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
+          {bedFlag && (
+            <div style={{
+              background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
+              padding: "10px 12px", marginTop: 10, fontSize: 12.5, color: "#6B4A1F",
+            }}>
+              <strong>⚠️ That's a {fmtDuration(bedFlag.dur)} night — is that right?</strong>
+              <div style={{ marginTop: 4, lineHeight: 1.45 }}>
+                {bedFlag.suggestion
+                  ? (bedFlag.suggestion.fixField === "start"
+                      ? <>If you meant <strong>{to12hLabel(bedFlag.suggestion.fixValue)}</strong> for this bedtime, tonight would be {fmtDuration(bedFlag.suggestion.dur)}.</>
+                      : <>If tomorrow's wake time was actually <strong>{to12hLabel(bedFlag.suggestion.fixValue)}</strong>, tonight would be {fmtDuration(bedFlag.suggestion.dur)}.</>)
+                  : <>Please double-check the AM/PM on this bedtime and tomorrow's wake time.</>}
+              </div>
+              {bedFlag.suggestion && !isCoach && (
+                <button
+                  onClick={() => bedFlag.suggestion.fixField === "start"
+                    ? update("bed_time", bedFlag.suggestion.fixValue)
+                    : fixTomorrowWakeTime(bedFlag.suggestion.fixValue)}
+                  style={{
+                    marginTop: 8, padding: "6px 12px", borderRadius: 7,
+                    border: "1px solid #C4714A", background: "#C4714A", color: "#FFFFFF",
+                    fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font.body,
+                  }}>
+                  Change {bedFlag.suggestion.fixField === "start" ? "bedtime" : "tomorrow's wake time"} to {to12hLabel(bedFlag.suggestion.fixValue)}
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <div style={{ marginBottom: 12 }}>
           <label style={gStyle.label}>How did they fall asleep?</label>
