@@ -2494,6 +2494,101 @@ const emptyEntry = () => ({
   naps: [emptyNap()],
 });
 
+// Turns a client's diary history into ranked "most used first" suggestion
+// lists per question, so a repeat answer (e.g. "fed to sleep", "cot") is one
+// tap instead of retyped every day. "How did they fall asleep?" is asked in
+// both the nap and bedtime sections, so those two share one pool — same
+// question, more data, more useful suggestions either place it's asked.
+const buildSuggestionPools = (rows) => {
+  const counts = {
+    howFellAsleep: new Map(), location: new Map(), resettled: new Map(),
+    napNotes: new Map(), daytimeNotes: new Map(), nightWakingNotes: new Map(), generalNotes: new Map(),
+  };
+  const bump = (map, raw) => {
+    const v = (raw || "").trim();
+    if (!v) return;
+    map.set(v, (map.get(v) || 0) + 1);
+  };
+  (rows || []).forEach((row) => {
+    (row.naps || []).forEach((n) => {
+      bump(counts.howFellAsleep, n.how_fell_asleep);
+      bump(counts.location, n.location);
+      bump(counts.resettled, n.resettled);
+      bump(counts.napNotes, n.notes);
+    });
+    bump(counts.howFellAsleep, row.bedtime_how_fell_asleep);
+    bump(counts.daytimeNotes, row.daytime_notes);
+    bump(counts.nightWakingNotes, row.night_wakings_notes);
+    bump(counts.generalNotes, row.notes);
+  });
+  const ranked = (map) => [...map.entries()].sort((a, b) => b[1] - a[1]).map(([v]) => v).slice(0, 8);
+  return {
+    howFellAsleep: ranked(counts.howFellAsleep),
+    location: ranked(counts.location),
+    resettled: ranked(counts.resettled),
+    napNotes: ranked(counts.napNotes),
+    daytimeNotes: ranked(counts.daytimeNotes),
+    nightWakingNotes: ranked(counts.nightWakingNotes),
+    generalNotes: ranked(counts.generalNotes),
+  };
+};
+const emptySuggestionPools = {
+  howFellAsleep: [], location: [], resettled: [],
+  napNotes: [], daytimeNotes: [], nightWakingNotes: [], generalNotes: [],
+};
+
+// A plain textarea/input with a dropdown of the client's own previously
+// typed answers for this exact question. Opens on focus, narrows as they
+// type, one tap fills the field. onMouseDown (not onClick) on the option is
+// what lets a tap register before the field's onBlur closes the dropdown.
+function SuggestField({ value, onChange, suggestions = [], placeholder, disabled, minHeight = 56, multiline = true }) {
+  const [open, setOpen] = useState(false);
+  const current = (value || "").trim().toLowerCase();
+  const filtered = (suggestions || [])
+    .filter((s) => s.toLowerCase() !== current)
+    .filter((s) => !current || s.toLowerCase().includes(current))
+    .slice(0, 6);
+  const Field = multiline ? "textarea" : "input";
+
+  return (
+    <div style={{ position: "relative" }}>
+      <Field
+        style={{ ...gStyle.input, ...(multiline ? { minHeight, resize: "vertical" } : {}) }}
+        value={value || ""}
+        placeholder={placeholder}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+      />
+      {open && !disabled && filtered.length > 0 && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 50,
+          background: "#FFFFFF", border: "1px solid rgba(196,113,74,0.25)",
+          borderRadius: 10, boxShadow: "0 8px 24px rgba(44,36,32,0.14)",
+          padding: 6, maxHeight: 190, overflowY: "auto", boxSizing: "border-box",
+        }}>
+          {filtered.map((s, i) => (
+            <button
+              key={i}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); onChange(s); setOpen(false); }}
+              style={{
+                display: "block", width: "100%", textAlign: "left",
+                padding: "8px 10px", borderRadius: 7, border: "none",
+                background: "transparent", color: "#2C2420",
+                fontSize: 13, fontFamily: font.body, cursor: "pointer",
+              }}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   const [selectedDate, setSelectedDate] = useState(today());
   const [entry, setEntry] = useState(null);
@@ -2505,6 +2600,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   // a night's sleep be flagged the moment the pairing is complete, whichever
   // day that happens to be entered on.
   const [adjTimes, setAdjTimes] = useState({ prevBedTime: null, nextWakeTime: null });
+  // Ranked "most used first" answers per question, built from this client's
+  // own diary history — powers the autosuggest dropdowns below.
+  const [suggestionPools, setSuggestionPools] = useState(emptySuggestionPools);
 
   const loadDiaryCount = async () => {
     const { count } = await supabase
@@ -2515,6 +2613,23 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   };
 
   useEffect(() => { if (!isCoach) loadDiaryCount(); }, [clientId]);
+
+  // Fetched once per client (not per date) — history doesn't change just
+  // because the coach/parent navigates to a different day.
+  useEffect(() => {
+    let cancelled = false;
+    const loadSuggestions = async () => {
+      const { data } = await supabase
+        .from("sleep_diary")
+        .select("naps, bedtime_how_fell_asleep, daytime_notes, night_wakings_notes, notes")
+        .eq("client_id", clientId)
+        .order("date", { ascending: false })
+        .limit(120);
+      if (!cancelled) setSuggestionPools(buildSuggestionPools(data || []));
+    };
+    loadSuggestions();
+    return () => { cancelled = true; };
+  }, [clientId]);
 
   // Load entry whenever selectedDate changes
   useEffect(() => {
@@ -2966,27 +3081,27 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
               )}
               <div style={{ marginBottom: 10 }}>
                 <label style={gStyle.label}>How did they fall asleep?</label>
-                <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={nap.how_fell_asleep || ""}
+                <SuggestField value={nap.how_fell_asleep} suggestions={suggestionPools.howFellAsleep}
                   placeholder="e.g. fed to sleep, rocked, independently, with dummy..."
-                  onChange={(e) => updateNap(idx, "how_fell_asleep", e.target.value)} disabled={isCoach} />
+                  onChange={(v) => updateNap(idx, "how_fell_asleep", v)} disabled={isCoach} />
               </div>
               <div style={{ marginBottom: 10 }}>
                 <label style={gStyle.label}>Where did they nap?</label>
-                <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={nap.location || ""}
+                <SuggestField value={nap.location} suggestions={suggestionPools.location}
                   placeholder="e.g. cot, pram, carrier, car, arms..."
-                  onChange={(e) => updateNap(idx, "location", e.target.value)} disabled={isCoach} />
+                  onChange={(v) => updateNap(idx, "location", v)} disabled={isCoach} />
               </div>
               <div style={{ marginBottom: 10 }}>
                 <label style={gStyle.label}>Did they need to be resettled?</label>
-                <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={nap.resettled || ""}
+                <SuggestField value={nap.resettled} suggestions={suggestionPools.resettled}
                   placeholder="e.g. no, once after 30 min, multiple times..."
-                  onChange={(e) => updateNap(idx, "resettled", e.target.value)} disabled={isCoach} />
+                  onChange={(v) => updateNap(idx, "resettled", v)} disabled={isCoach} />
               </div>
               <div>
                 <label style={gStyle.label}>Additional nap notes</label>
-                <textarea style={{ ...gStyle.input, minHeight: 60, resize: "vertical" }} value={nap.notes || ""}
+                <SuggestField value={nap.notes} suggestions={suggestionPools.napNotes} minHeight={60}
                   placeholder="Anything else to note about this nap..."
-                  onChange={(e) => updateNap(idx, "notes", e.target.value)} disabled={isCoach} />
+                  onChange={(v) => updateNap(idx, "notes", v)} disabled={isCoach} />
               </div>
             </div>
           );
@@ -2997,10 +3112,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
       <div style={gStyle.card}>
         <h3 style={{ fontFamily: font.display, color: C.blue, margin: "0 0 8px" }}>Daytime Behaviour & Activities</h3>
         <p style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>e.g. nursery/kindy, home all day, multiple meltdowns, good mood, teething, unwell...</p>
-        <textarea style={{ ...gStyle.input, minHeight: 80, resize: "vertical" }}
-          value={entry.daytime_notes || ""}
+        <SuggestField value={entry.daytime_notes} suggestions={suggestionPools.daytimeNotes} minHeight={80}
           placeholder="Notes about the day..."
-          onChange={(e) => update("daytime_notes", e.target.value)} disabled={isCoach} />
+          onChange={(v) => update("daytime_notes", v)} disabled={isCoach} />
       </div>
 
       {/* Bedtime */}
@@ -3062,9 +3176,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
         </div>
         <div style={{ marginBottom: 12 }}>
           <label style={gStyle.label}>How did they fall asleep?</label>
-          <textarea style={{ ...gStyle.input, minHeight: 56, resize: "vertical" }} value={entry.bedtime_how_fell_asleep || ""}
+          <SuggestField value={entry.bedtime_how_fell_asleep} suggestions={suggestionPools.howFellAsleep}
             placeholder="e.g. fed to sleep, rocked, independently, with dummy..."
-            onChange={(e) => update("bedtime_how_fell_asleep", e.target.value)} disabled={isCoach} />
+            onChange={(v) => update("bedtime_how_fell_asleep", v)} disabled={isCoach} />
         </div>
         <div style={{ marginBottom: 12 }}>
           <label style={gStyle.label}>Times woke overnight</label>
@@ -3120,9 +3234,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
               </div>
               <div>
                 <label style={gStyle.label}>Night waking notes</label>
-                <input style={{ ...gStyle.input, minHeight: 60 }} value={entry.night_wakings_notes || ""}
+                <SuggestField value={entry.night_wakings_notes} suggestions={suggestionPools.nightWakingNotes} multiline={false}
                   placeholder="e.g. awake 2am for 45 min, resettled with feed..."
-                  onChange={(e) => update("night_wakings_notes", e.target.value)} disabled={isCoach} />
+                  onChange={(v) => update("night_wakings_notes", v)} disabled={isCoach} />
               </div>
             </div>
           ) : (
@@ -3191,18 +3305,17 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
               )}
               <div style={{ marginTop: 12 }}>
                 <label style={gStyle.label}>Night waking notes</label>
-                <input style={{ ...gStyle.input, minHeight: 60 }} value={entry.night_wakings_notes || ""}
+                <SuggestField value={entry.night_wakings_notes} suggestions={suggestionPools.nightWakingNotes} multiline={false}
                   placeholder="e.g. awake 2am for 45 min, resettled with feed..."
-                  onChange={(e) => update("night_wakings_notes", e.target.value)} disabled={isCoach} />
+                  onChange={(v) => update("night_wakings_notes", v)} disabled={isCoach} />
               </div>
             </div>
           )}
         </div>
         <label style={gStyle.label}>General notes</label>
-        <textarea style={{ ...gStyle.input, minHeight: 80, resize: "vertical" }}
+        <SuggestField value={entry.notes} suggestions={suggestionPools.generalNotes} minHeight={80}
           placeholder="How was settling? Anything else to note..."
-          value={entry.notes || ""}
-          onChange={(e) => update("notes", e.target.value)} disabled={isCoach} />
+          onChange={(v) => update("notes", v)} disabled={isCoach} />
       </div>
 
       {/* Date nav (bottom) */}
