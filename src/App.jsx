@@ -3887,13 +3887,13 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
         <div className="print-only" style={{ display: "none", marginBottom: 24, textAlign: "center" }}>
           <img src={LOGO_URL}
             alt="Signs for Sleep" style={{ maxWidth: 280, height: "auto" }} />
-          <div style={{ fontFamily: font.display, fontSize: 20, color: C.terracotta, marginTop: 12 }}>
+          <div style={{ fontFamily: font.display, fontSize: 20, color: "#4A6274", marginTop: 12 }}>
             Sleep Plan{childName ? ` for ${childName}` : ""}
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
             {plan.shared_at ? `Shared ${new Date(plan.shared_at).toLocaleDateString("en-AU", { day:"numeric", month:"long", year:"numeric" })}` : ""}
           </div>
-          <hr style={{ borderColor: C.border, margin: "16px 0" }} />
+          <hr style={{ borderColor: "#B8963E", margin: "16px 0" }} />
         </div>
 
         <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
@@ -3915,16 +3915,40 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
             No content has been added to your sleep plan yet.
           </div>
         ) : (
-          filledSections.map((s, i) => (
-            <div key={i} style={{ ...gStyle.card, pageBreakInside: "avoid" }}>
-              <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 12px", fontSize: 18 }}>
-                {s.title}
-              </h3>
-              <div style={{ fontSize: 14, color: C.dark, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
-                {s.content}
-              </div>
+          <>
+            {/* On-screen view — cards make it easy to scan while browsing in-app */}
+            <div className="no-print">
+              {filledSections.map((s, i) => (
+                <div key={i} style={{ ...gStyle.card, marginBottom: 16 }}>
+                  <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 12px", fontSize: 18 }}>
+                    {s.title}
+                  </h3>
+                  <div style={{ fontSize: 14, color: C.dark, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
+                    {s.content}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))
+            {/* Print view — no card borders, and no pageBreakInside:avoid, so a
+                heading sits directly under whatever came before it and a long
+                body can flow across a page break instead of the whole section
+                jumping to the next page and leaving a gap behind it. */}
+            <div className="print-only" style={{ display: "none" }}>
+              {filledSections.map((s, i) => (
+                <div key={i} style={{ marginBottom: 20 }}>
+                  <h3 style={{
+                    fontFamily: font.display, color: "#C4714A", margin: "0 0 8px", fontSize: 18,
+                    breakAfter: "avoid-page", pageBreakAfter: "avoid",
+                  }}>
+                    {s.title}
+                  </h3>
+                  <p style={{ fontSize: 14, color: C.dark, lineHeight: 1.8, whiteSpace: "pre-wrap", margin: 0 }}>
+                    {s.content}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </>
         )}
         <style>{`
           @media print {
@@ -4027,10 +4051,10 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
       <div className="print-only" style={{ display: "none", marginBottom: 24, textAlign: "center" }}>
         <img src={LOGO_URL}
           alt="Signs for Sleep" style={{ maxWidth: 280, height: "auto" }} />
-        <div style={{ fontFamily: font.display, fontSize: 20, color: C.terracotta, marginTop: 12 }}>
+        <div style={{ fontFamily: font.display, fontSize: 20, color: "#4A6274", marginTop: 12 }}>
           Sleep Plan{childName ? ` for ${childName}` : ""}
         </div>
-        <hr style={{ borderColor: C.border, margin: "16px 0" }} />
+        <hr style={{ borderColor: "#B8963E", margin: "16px 0" }} />
       </div>
 
       {/* Sections */}
@@ -4071,11 +4095,17 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
         </div>
       ))}
 
-      {/* Print version of sections */}
+      {/* Print version of sections — no pageBreakInside:avoid here, so a
+          heading sits directly under whatever came before it and a long
+          body can flow across a page break instead of the whole section
+          jumping to the next page and leaving a gap behind it. */}
       {sections.filter(s => s.content?.trim()).map((s, i) => (
-        <div key={i} className="print-only" style={{ display: "none", pageBreakInside: "avoid", marginBottom: 20 }}>
-          <h3 style={{ fontFamily: font.display, color: C.terracotta, fontSize: 16, marginBottom: 8 }}>{s.title}</h3>
-          <p style={{ fontSize: 13, lineHeight: 1.8, whiteSpace: "pre-wrap", color: C.dark }}>{s.content}</p>
+        <div key={i} className="print-only" style={{ display: "none", marginBottom: 20 }}>
+          <h3 style={{
+            fontFamily: font.display, color: "#C4714A", fontSize: 16, marginBottom: 8,
+            breakAfter: "avoid-page", pageBreakAfter: "avoid",
+          }}>{s.title}</h3>
+          <p style={{ fontSize: 13, lineHeight: 1.8, whiteSpace: "pre-wrap", color: C.dark, margin: 0 }}>{s.content}</p>
         </div>
       ))}
 
