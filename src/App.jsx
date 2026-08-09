@@ -3955,6 +3955,13 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
             .no-print { display: none !important; }
             .print-only { display: block !important; }
             body { background: white !important; }
+            /* Without this, some browsers mute/shift text colours when
+               printing (the terracotta headings come out closer to brown). */
+            .print-only, .print-only * {
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+              color-adjust: exact !important;
+            }
           }
         `}</style>
       </div>
@@ -4127,6 +4134,13 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
           header, nav, [style*="sticky"], [style*="position: sticky"] { display: none !important; }
           /* Hide tab bar */
           div[style*="borderBottom"][style*="padding: \"0 24px\""] { display: none !important; }
+          /* Without this, some browsers mute/shift text colours when
+             printing (the terracotta headings come out closer to brown). */
+          .print-only, .print-only * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            color-adjust: exact !important;
+          }
         }
       `}</style>
     </div>
