@@ -74,6 +74,13 @@ function IosPrintHelpModal({ open, onClose }) {
     }
   };
 
+  const steps = [
+    "Long-press the QR code below, then choose \"Open in Safari\" — or scan it with your Camera app.",
+    "Log in and go back to this page.",
+    "Tap the Share icon, then \"Print\".",
+    "On the print preview, tap the Share icon again and choose \"Save to Files\".",
+  ];
+
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 2100,
@@ -91,17 +98,17 @@ function IosPrintHelpModal({ open, onClose }) {
         </h3>
         <p style={{ fontSize: 13, color: C.dark, lineHeight: 1.6, marginBottom: 16 }}>
           The installed app can't open the print dialog on iPhone/iPad — that's
-          an Apple restriction on Home Screen apps. Open this page in Safari
-          instead and printing works as normal.
+          an Apple restriction on Home Screen apps. To save this as a PDF:
         </p>
 
-        <img src={qrSrc} alt="QR code to open this app in Safari" style={{ width: 160, height: 160, margin: "0 auto 6px", display: "block" }} />
-        <p style={{ fontSize: 11, color: C.muted, marginBottom: 18 }}>
-          Scan with your iPhone's Camera app — it opens straight into Safari
-        </p>
+        <img src={qrSrc} alt="QR code to open this app in Safari" style={{ width: 110, height: 110, margin: "0 auto 14px", display: "block" }} />
+
+        <ol style={{ textAlign: "left", fontSize: 12.5, color: C.dark, lineHeight: 1.6, margin: "0 0 18px", paddingLeft: 20 }}>
+          {steps.map((step, i) => <li key={i} style={{ marginBottom: 6 }}>{step}</li>)}
+        </ol>
 
         <button onClick={copyLink} style={{ ...gStyle.btnPrimary, marginBottom: 6 }}>
-          {copied ? "✓ Link copied" : "📋 Copy link"}
+          {copied ? "✓ Link copied" : "📋 Copy link instead"}
         </button>
         <p style={{ fontSize: 11, color: C.muted, marginBottom: 18 }}>
           Then open Safari and paste it into the address bar
