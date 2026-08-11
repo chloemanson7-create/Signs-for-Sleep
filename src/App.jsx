@@ -36,22 +36,84 @@ const isIosStandalone = () => {
 };
 
 // Every "Print / Save PDF" button in the app should call this instead of
-// window.print() directly, so the iPhone/iPad home-screen case gets a
-// helpful message instead of a button that just appears to do nothing.
-const printOrGuide = () => {
+// window.print() directly. On iPhone/iPad's installed Home Screen app,
+// window.print() silently does nothing — showIosHelp (a useState setter
+// passed in by the caller) opens IosPrintHelpModal instead of a plain
+// alert(), because a native alert() can't hold a tappable link or QR code.
+const printOrGuide = (showIosHelp) => {
   if (isIosStandalone()) {
-    alert(
-      "Printing isn't available inside the installed app on iPhone/iPad.\n\n" +
-      "To save this as a PDF:\n" +
-      "1. Open Safari (not the app icon on your Home Screen)\n" +
-      "2. Log in and go back to this page\n" +
-      "3. Tap the Share icon, then \"Print\"\n" +
-      "4. On the print preview, tap the Share icon again and choose \"Save to Files\""
-    );
+    if (showIosHelp) showIosHelp(true);
     return;
   }
   window.print();
 };
+
+// Shown instead of a plain alert() when Print/Save PDF is tapped from an
+// iPhone/iPad's installed Home Screen app. A same-origin link tapped from
+// inside that installed app doesn't reliably launch real Safari — iOS keeps
+// it inside the app's own standalone window rather than actually breaking
+// out — so instead of a link, this gives two things that genuinely do work:
+// a "Copy link" button (paste into Safari's address bar) and a QR code
+// (scanning it with the iPhone's Camera app opens Safari directly, since
+// that's a completely separate context from this installed app).
+function IosPrintHelpModal({ open, onClose }) {
+  const [copied, setCopied] = useState(false);
+  if (!open) return null;
+
+  const url = typeof window !== "undefined" ? window.location.origin : "";
+  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}`;
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      // Clipboard API can fail without permission — the link is still shown
+      // on screen below so it can be selected and copied manually.
+    }
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 2100,
+      background: "rgba(44,36,32,0.55)", display: "flex",
+      alignItems: "center", justifyContent: "center", padding: 20,
+    }}>
+      <div style={{
+        background: C.white, borderRadius: 16, padding: 24,
+        maxWidth: 340, width: "100%", textAlign: "center",
+        maxHeight: "90vh", overflowY: "auto", boxSizing: "border-box",
+      }}>
+        <div style={{ fontSize: 30, marginBottom: 8 }}>🖨️</div>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 8px", fontSize: 18 }}>
+          Printing needs Safari
+        </h3>
+        <p style={{ fontSize: 13, color: C.dark, lineHeight: 1.6, marginBottom: 16 }}>
+          The installed app can't open the print dialog on iPhone/iPad — that's
+          an Apple restriction on Home Screen apps. Open this page in Safari
+          instead and printing works as normal.
+        </p>
+
+        <img src={qrSrc} alt="QR code to open this app in Safari" style={{ width: 160, height: 160, margin: "0 auto 6px", display: "block" }} />
+        <p style={{ fontSize: 11, color: C.muted, marginBottom: 18 }}>
+          Scan with your iPhone's Camera app — it opens straight into Safari
+        </p>
+
+        <button onClick={copyLink} style={{ ...gStyle.btnPrimary, marginBottom: 6 }}>
+          {copied ? "✓ Link copied" : "📋 Copy link"}
+        </button>
+        <p style={{ fontSize: 11, color: C.muted, marginBottom: 18 }}>
+          Then open Safari and paste it into the address bar
+        </p>
+
+        <button onClick={onClose} style={{ ...gStyle.btnSecondary, width: "100%" }}>
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ── PALETTE & STYLES ───────────────────────────────────────────────────────
 const C = {
@@ -3124,15 +3186,15 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                   onChange={(v) => updateNap(idx, "location", v)} disabled={isCoach} />
               </div>
               <div style={{ marginBottom: 10 }}>
-                <label style={gStyle.label}>Did they need to be resettled?</label>
+                <label style={gStyle.label}>Did they need to be resettled or woken up?</label>
                 <SuggestField value={nap.resettled} suggestions={suggestionPools.resettled}
                   placeholder="e.g. no, once after 30 min, multiple times..."
                   onChange={(v) => updateNap(idx, "resettled", v)} disabled={isCoach} />
               </div>
               <div>
-                <label style={gStyle.label}>Additional nap notes</label>
+                <label style={gStyle.label}>Additional nap notes/how was their temperament on waking up?</label>
                 <SuggestField value={nap.notes} suggestions={suggestionPools.napNotes} minHeight={60}
-                  placeholder="Anything else to note about this nap..."
+                  placeholder="e.g. attempted to put them down earlier and it didn't work"
                   onChange={(v) => updateNap(idx, "notes", v)} disabled={isCoach} />
               </div>
             </div>
@@ -3375,6 +3437,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
 function SleepAnalysis({ client }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [iosHelpOpen, setIosHelpOpen] = useState(false);
 
   useEffect(() => {
     supabase.from("sleep_diary").select("*")
@@ -3625,7 +3688,7 @@ function SleepAnalysis({ client }) {
         </div>
         <button
           style={{ ...gStyle.btnGold, display: "flex", alignItems: "center", gap: 8 }}
-          onClick={printOrGuide}
+          onClick={() => printOrGuide(setIosHelpOpen)}
         >
           🖨 Print / Save as PDF
         </button>
@@ -3731,6 +3794,7 @@ function SleepAnalysis({ client }) {
           div[style*="borderBottom"][style*="padding: \"0 24px\""] { display: none !important; }
         }
       `}</style>
+      <IosPrintHelpModal open={iosHelpOpen} onClose={() => setIosHelpOpen(false)} />
     </div>
   );
 }
@@ -3759,6 +3823,7 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
   const [showVersions, setShowVersions] = useState(false);
   const [viewingVersion, setViewingVersion] = useState(null);
   const [childName, setChildName] = useState("");
+  const [iosHelpOpen, setIosHelpOpen] = useState(false);
   const saveTimer = useRef(null);
 
   // Load child name from intake
@@ -3894,7 +3959,7 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
     setPlan(prev => ({ ...prev, shared: false }));
   };
 
-  const printPlan = printOrGuide;
+  const printPlan = () => printOrGuide(setIosHelpOpen);
 
   if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading sleep plan…</p>;
 
@@ -3996,6 +4061,7 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
             }
           }
         `}</style>
+        <IosPrintHelpModal open={iosHelpOpen} onClose={() => setIosHelpOpen(false)} />
       </div>
     );
   }
@@ -4175,6 +4241,7 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
           }
         }
       `}</style>
+      <IosPrintHelpModal open={iosHelpOpen} onClose={() => setIosHelpOpen(false)} />
     </div>
   );
 }
@@ -4392,6 +4459,7 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
   const [showLibraryManager, setShowLibraryManager] = useState(false);
+  const [iosHelpOpen, setIosHelpOpen] = useState(false);
   const saveTimer = useRef(null);
 
   const loadLibrary = useCallback(async () => {
@@ -4505,7 +4573,7 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
 
   const share = async () => { await saveToolbox(toolbox, tiles, { share: true }); };
   const unshare = async () => { await saveToolbox(toolbox, tiles, { share: false }); };
-  const printToolbox = printOrGuide;
+  const printToolbox = () => printOrGuide(setIosHelpOpen);
 
   // Auto-fill age label from the intake DOB once, if the coach hasn't set one
   useEffect(() => {
@@ -4550,6 +4618,7 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
           </div>
         )}
         <style>{TOOLBOX_PRINT_CSS}</style>
+        <IosPrintHelpModal open={iosHelpOpen} onClose={() => setIosHelpOpen(false)} />
       </div>
     );
   }
@@ -4710,6 +4779,7 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
       </div>
 
       <style>{TOOLBOX_PRINT_CSS}</style>
+      <IosPrintHelpModal open={iosHelpOpen} onClose={() => setIosHelpOpen(false)} />
     </div>
   );
 }
@@ -4897,6 +4967,7 @@ function ProgressRecap({ clientId, isCoach }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
+  const [iosHelpOpen, setIosHelpOpen] = useState(false);
   const saveTimer = useRef(null);
 
   useEffect(() => {
@@ -4962,7 +5033,7 @@ function ProgressRecap({ clientId, isCoach }) {
     setRecap((prev) => ({ ...prev, shared: false }));
   };
 
-  const printRecap = printOrGuide;
+  const printRecap = () => printOrGuide(setIosHelpOpen);
 
   if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading recap…</p>;
 
@@ -4999,6 +5070,7 @@ function ProgressRecap({ clientId, isCoach }) {
         )}
         <RecapEntryList entries={entries} />
         <style>{PROGRESS_PRINT_CSS}</style>
+        <IosPrintHelpModal open={iosHelpOpen} onClose={() => setIosHelpOpen(false)} />
       </div>
     );
   }
@@ -5069,6 +5141,7 @@ function ProgressRecap({ clientId, isCoach }) {
       )}
 
       <style>{PROGRESS_PRINT_CSS}</style>
+      <IosPrintHelpModal open={iosHelpOpen} onClose={() => setIosHelpOpen(false)} />
     </div>
   );
 }
