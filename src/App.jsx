@@ -21,6 +21,38 @@ const DEFAULT_CONTACT_EVERY = 7;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
+// UI around them — and window.print() silently does nothing there (no
+// dialog, no error, nothing). It's a WebKit limitation, not something a web
+// app can override. Detect it so the print buttons can guide someone to open
+// the same page in an actual Safari tab instead, where Print → Save to Files
+// works exactly as expected.
+const isIosStandalone = () => {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent || navigator.platform || "");
+  const standalone = navigator.standalone === true
+    || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+  return isIos && !!standalone;
+};
+
+// Every "Print / Save PDF" button in the app should call this instead of
+// window.print() directly, so the iPhone/iPad home-screen case gets a
+// helpful message instead of a button that just appears to do nothing.
+const printOrGuide = () => {
+  if (isIosStandalone()) {
+    alert(
+      "Printing isn't available inside the installed app on iPhone/iPad.\n\n" +
+      "To save this as a PDF:\n" +
+      "1. Open Safari (not the app icon on your Home Screen)\n" +
+      "2. Log in and go back to this page\n" +
+      "3. Tap the Share icon, then \"Print\"\n" +
+      "4. On the print preview, tap the Share icon again and choose \"Save to Files\""
+    );
+    return;
+  }
+  window.print();
+};
+
 // ── PALETTE & STYLES ───────────────────────────────────────────────────────
 const C = {
   terracotta: "#C4714A",
@@ -3593,7 +3625,7 @@ function SleepAnalysis({ client }) {
         </div>
         <button
           style={{ ...gStyle.btnGold, display: "flex", alignItems: "center", gap: 8 }}
-          onClick={() => window.print()}
+          onClick={printOrGuide}
         >
           🖨 Print / Save as PDF
         </button>
@@ -3862,7 +3894,7 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
     setPlan(prev => ({ ...prev, shared: false }));
   };
 
-  const printPlan = () => window.print();
+  const printPlan = printOrGuide;
 
   if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading sleep plan…</p>;
 
@@ -4473,7 +4505,7 @@ function KnowledgeToolbox({ clientId, clientData, isCoach }) {
 
   const share = async () => { await saveToolbox(toolbox, tiles, { share: true }); };
   const unshare = async () => { await saveToolbox(toolbox, tiles, { share: false }); };
-  const printToolbox = () => window.print();
+  const printToolbox = printOrGuide;
 
   // Auto-fill age label from the intake DOB once, if the coach hasn't set one
   useEffect(() => {
@@ -4930,7 +4962,7 @@ function ProgressRecap({ clientId, isCoach }) {
     setRecap((prev) => ({ ...prev, shared: false }));
   };
 
-  const printRecap = () => window.print();
+  const printRecap = printOrGuide;
 
   if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading recap…</p>;
 
