@@ -5143,12 +5143,18 @@ function extractYouTubeId(url) {
   return match ? match[1] : null;
 }
 
-// Renders an embedded YouTube player or a "view PDF" link, depending on
+// Renders an embedded YouTube player or a "view PDF" button, depending on
 // resource type. Videos are hosted on YouTube (as Unlisted) rather than
 // Supabase Storage — free tier's 50MB-per-file cap makes even short phone
 // video far too tight, and YouTube handles storage/compression/bandwidth
 // for free with no meaningful limit for clips this length.
-function ResourceMedia({ resource }) {
+//
+// PDFs open via onOpenPdf (an in-app modal — see PdfViewerModal) rather than
+// a plain target="_blank" link. In a phone's installed PWA, target="_blank"
+// often just navigates the app's own single window instead of opening a
+// real new tab, leaving no obvious way back short of the OS back-swipe. The
+// modal always has a visible close button regardless of platform.
+function ResourceMedia({ resource, onOpenPdf }) {
   if (resource.type === "video") {
     const videoId = extractYouTubeId(resource.file_url);
     if (!videoId) {
@@ -5171,18 +5177,83 @@ function ResourceMedia({ resource }) {
     );
   }
   return (
-    <a
-      href={resourceFileUrl(resource.file_url)}
-      target="_blank"
-      rel="noopener noreferrer"
+    <button
+      onClick={() => onOpenPdf(resource)}
       style={{
         display: "flex", alignItems: "center", gap: 10, padding: "16px",
-        background: C.cream, borderRadius: 10, textDecoration: "none",
+        background: C.cream, borderRadius: 10, border: "none",
         color: C.terracottaDark, fontWeight: 600, fontSize: 14,
+        width: "100%", textAlign: "left", cursor: "pointer", fontFamily: font.body,
       }}
     >
       📄 View PDF
-    </a>
+    </button>
+  );
+}
+
+// Full-screen in-app PDF viewer. Exists specifically so there's always a
+// visible, tappable way out — on desktop the browser's own tab/window
+// controls are enough, but a phone's installed PWA has no chrome of its own,
+// so without this an opened PDF can trap someone until they force-close the
+// app or discover the OS back-swipe gesture.
+function PdfViewerModal({ resource, onClose }) {
+  useEffect(() => {
+    if (!resource) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prevOverflow; };
+  }, [resource]);
+
+  if (!resource) return null;
+  const url = resourceFileUrl(resource.file_url);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 2000,
+      background: C.white, display: "flex", flexDirection: "column",
+    }}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 12, padding: "calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px",
+        borderBottom: `1px solid ${C.border}`, background: C.white, flexShrink: 0,
+      }}>
+        <span style={{
+          fontWeight: 700, fontSize: 14, color: C.dark,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {resource.title || "PDF"}
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12,
+              textDecoration: "none", display: "flex", alignItems: "center",
+            }}
+          >
+            ⤢ Open in new tab
+          </a>
+          <button
+            onClick={onClose}
+            aria-label="Close PDF"
+            style={{
+              width: 36, height: 36, borderRadius: "50%", border: `1.5px solid ${C.border}`,
+              background: C.white, color: C.dark, fontSize: 18, lineHeight: 1,
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+      <iframe
+        src={url}
+        title={resource.title || "PDF"}
+        style={{ flex: 1, width: "100%", border: "none" }}
+      />
+    </div>
   );
 }
 
@@ -5575,6 +5646,7 @@ function ClientResourcesViewer({ clientId }) {
   const [clientPackage, setClientPackage] = useState(null);
   const [grantedIds, setGrantedIds] = useState(new Set());
   const [loading, setLoading] = useState(true);
+  const [viewingPdf, setViewingPdf] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -5618,7 +5690,7 @@ function ClientResourcesViewer({ clientId }) {
           <div className="resource-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             {grouped[cat].map((r) => (
               <div key={r.id} style={gStyle.card}>
-                <ResourceMedia resource={r} />
+                <ResourceMedia resource={r} onOpenPdf={setViewingPdf} />
                 <div style={{ fontWeight: 700, fontSize: 14, color: C.dark, margin: "10px 0 2px" }}>{r.title}</div>
                 {r.description && <div style={{ fontSize: 12, color: C.mid }}>{r.description}</div>}
               </div>
@@ -5631,6 +5703,7 @@ function ClientResourcesViewer({ clientId }) {
           .resource-grid { grid-template-columns: 1fr !important; }
         }
       `}</style>
+      <PdfViewerModal resource={viewingPdf} onClose={() => setViewingPdf(null)} />
     </div>
   );
 }
