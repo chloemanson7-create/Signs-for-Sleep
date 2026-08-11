@@ -5233,11 +5233,34 @@ function PdfViewerModal({ resource, onClose }) {
     if (!resource) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = prevOverflow; };
+
+    // A PDF opened this way renders at its actual page size rather than
+    // fit-to-width, so on a phone it looks "zoomed in" compared to opening
+    // it in a new tab. Pinching back out should fix that — but the app's own
+    // viewport meta tag (set to stop double-tap-zoom on the rest of the UI)
+    // blocks pinch-zoom for everything on the page, including this iframe's
+    // content, since mobile Safari applies that restriction page-wide. Relax
+    // it just while the PDF is open, and restore the exact previous value on
+    // close so the rest of the app is unaffected.
+    const viewportMeta = document.querySelector('meta[name="viewport"]');
+    const prevViewportContent = viewportMeta ? viewportMeta.getAttribute("content") : null;
+    if (viewportMeta) {
+      viewportMeta.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes");
+    }
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      if (viewportMeta && prevViewportContent !== null) {
+        viewportMeta.setAttribute("content", prevViewportContent);
+      }
+    };
   }, [resource]);
 
   if (!resource) return null;
   const url = resourceFileUrl(resource.file_url);
+  // #view=FitH asks the PDF to open fit-to-width where the viewer respects
+  // it (helps on desktop/Chrome); harmless where it's ignored.
+  const viewerSrc = `${url}#view=FitH`;
 
   return (
     <div style={{
@@ -5281,7 +5304,7 @@ function PdfViewerModal({ resource, onClose }) {
         </div>
       </div>
       <iframe
-        src={url}
+        src={viewerSrc}
         title={resource.title || "PDF"}
         style={{ flex: 1, width: "100%", border: "none" }}
       />
