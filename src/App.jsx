@@ -5258,9 +5258,16 @@ function PdfViewerModal({ resource, onClose }) {
 
   if (!resource) return null;
   const url = resourceFileUrl(resource.file_url);
-  // #view=FitH asks the PDF to open fit-to-width where the viewer respects
-  // it (helps on desktop/Chrome); harmless where it's ignored.
-  const viewerSrc = `${url}#view=FitH`;
+  // Pointing the iframe straight at the PDF hands rendering to the OS's
+  // built-in plugin — on iOS that plugin is much more limited inside a
+  // nested iframe than when it's the top-level page: no pinch-zoom-out and
+  // only the first page of multi-page files. Routing it through PDF.js's
+  // viewer instead renders every page on a canvas (real web content, not a
+  // native plugin), so it behaves the same everywhere and still lives inside
+  // our own page — which is what lets the close button keep working.
+  // Needs the raw absolute Supabase URL (not the branded /files/ path) since
+  // pdf.js runs on mozilla.github.io and has to fetch it cross-origin.
+  const viewerSrc = `https://mozilla.github.io/pdf.js/web/viewer.html?file=${encodeURIComponent(resource.file_url)}#zoom=page-width`;
 
   return (
     <div style={{
