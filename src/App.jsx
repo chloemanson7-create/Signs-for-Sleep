@@ -2182,19 +2182,28 @@ function ClientApp({ session, onLogout }) {
       )}
 
       {/* Tab bar */}
-      <div className="no-print" style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "0 16px", display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap" }}>
-        {tabs.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)} style={{
-            padding: "12px 16px", border: "none", background: "transparent", cursor: "pointer",
-            fontFamily: font.body, fontSize: 14, fontWeight: 600,
-            color: tab === t.key ? C.terracotta : C.muted,
-            borderBottom: tab === t.key ? `2px solid ${C.terracotta}` : "2px solid transparent",
-            whiteSpace: "nowrap",
-          }}>
-            {t.label}
-          </button>
-        ))}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+      {/* Tabs and the action buttons are two separate flex-wrap groups (not
+          one shared row) — sharing a single wrapping row let the trailing
+          marginLeft:auto action group perturb which row each tab landed on,
+          so wrapped tab rows (e.g. "Progress"/"Toolbox" dropping to a new
+          line) didn't all start flush at the same left edge. Keeping them
+          independent means the tabs always wrap as their own flush-left
+          block, regardless of what the action buttons are doing. */}
+      <div className="no-print" style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "0 16px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", gap: 2, flexWrap: "wrap", minWidth: 0 }}>
+          {tabs.map((t) => (
+            <button key={t.key} onClick={() => setTab(t.key)} style={{
+              padding: "12px 16px", border: "none", background: "transparent", cursor: "pointer",
+              fontFamily: font.body, fontSize: 14, fontWeight: 600,
+              color: tab === t.key ? C.terracotta : C.muted,
+              borderBottom: tab === t.key ? `2px solid ${C.terracotta}` : "2px solid transparent",
+              whiteSpace: "nowrap",
+            }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <ContactCoachButton clientId={session.clientId} clientPackage={clientPackage?.package} defaultName={session.clientName} />
           {/* Founding Family feedback button — only visible when is_app_tester is true on this client's record */}
           {clientPackage?.is_app_tester && (
