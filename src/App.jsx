@@ -2182,19 +2182,25 @@ function ClientApp({ session, onLogout }) {
       )}
 
       {/* Tab bar */}
-      {/* Tabs and the action buttons are two separate flex-wrap groups (not
-          one shared row) — sharing a single wrapping row let the trailing
-          marginLeft:auto action group perturb which row each tab landed on,
-          so wrapped tab rows (e.g. "Progress"/"Toolbox" dropping to a new
-          line) didn't all start flush at the same left edge. Keeping them
-          independent means the tabs always wrap as their own flush-left
-          block, regardless of what the action buttons are doing. */}
+      {/* On a phone this wraps to roughly 2 tabs per row. A plain flex-wrap
+          row sizes each button to its own label's width, so the second
+          "column" only lines up by coincidence — "Questionnaire" is wider
+          than "Sleep Plan", so whatever sits next to it ("Sleep Diary")
+          starts further right than whatever sits next to the shorter
+          "Sleep Plan" ("Progress"), even though both are visually "column
+          two". A CSS grid with equal-width auto-fit columns fixes that: every
+          tab's cell is the same width, so every row's start/second column
+          lines up regardless of label length — and on a wide screen it still
+          fits all the tabs on one row the same as before. */}
       <div className="no-print" style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "0 16px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", gap: 2, flexWrap: "wrap", minWidth: 0 }}>
+        <div style={{
+          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+          gap: 2, flex: "1 1 auto", minWidth: 0,
+        }}>
           {tabs.map((t) => (
             <button key={t.key} onClick={() => setTab(t.key)} style={{
               padding: "12px 16px", border: "none", background: "transparent", cursor: "pointer",
-              fontFamily: font.body, fontSize: 14, fontWeight: 600,
+              fontFamily: font.body, fontSize: 14, fontWeight: 600, textAlign: "left",
               color: tab === t.key ? C.terracotta : C.muted,
               borderBottom: tab === t.key ? `2px solid ${C.terracotta}` : "2px solid transparent",
               whiteSpace: "nowrap",
