@@ -2719,6 +2719,13 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   // Ranked "most used first" answers per question, built from this client's
   // own diary history — powers the autosuggest dropdowns below.
   const [suggestionPools, setSuggestionPools] = useState(emptySuggestionPools);
+  // Ticks every 30s so an in-progress nap/waking's "so far" duration stays
+  // roughly live without needing a per-row timer.
+  const [nowTick, setNowTick] = useState(() => getCurrentTime());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(getCurrentTime()), 30000);
+    return () => clearInterval(id);
+  }, []);
 
   const loadDiaryCount = async () => {
     const { count } = await supabase
@@ -2942,6 +2949,24 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
     await doSave(updated, selectedDate);
   };
 
+  // One-tap "they've just gone down" — stamps the current time as start on
+  // the trailing nap row if it's still blank (the common case: the default
+  // first nap row hasn't been touched yet), otherwise adds a fresh row, so
+  // this never leaves an unused blank nap sitting alongside the real one.
+  const startNapNow = async () => {
+    const now = getCurrentTime();
+    const naps = [...(entry.naps || [])];
+    const last = naps[naps.length - 1];
+    if (last && !last.start && !last.end) {
+      naps[naps.length - 1] = { ...last, start: now };
+    } else {
+      naps.push({ ...emptyNap(), start: now });
+    }
+    const updated = { ...entry, naps };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
+  };
+
   const removeNap = async (idx) => {
     const naps = entry.naps.filter((_, i) => i !== idx);
     const updated = { ...entry, naps };
@@ -2969,6 +2994,29 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   const addWaking = async () => {
     const night_wakings = [...(entry.night_wakings || []), emptyWaking()];
     const updated = { ...entry, night_wakings };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
+  };
+
+  // One-tap "they've just woken up" — works from either logging mode.
+  // Detailed mode already tracks individual wakings, so this just stamps the
+  // trailing waking row if it's still blank, otherwise adds a fresh one (same
+  // "don't leave an unused blank row behind" logic as startNapNow). Simple
+  // mode doesn't have a per-waking time field to stamp, so this switches to
+  // detailed mode first (the same way tapping "Log each waking" does) and
+  // then adds the stamped waking.
+  const logWakingNow = async () => {
+    const now = getCurrentTime();
+    const night_wakings = [...(entry.night_wakings || [])];
+    const last = night_wakings[night_wakings.length - 1];
+    if (last && !last.woke_at && !last.back_asleep_at) {
+      night_wakings[night_wakings.length - 1] = { ...last, woke_at: now };
+    } else {
+      night_wakings.push({ ...emptyWaking(), woke_at: now });
+    }
+    const updated = entry.night_wakings_mode === "detailed"
+      ? { ...entry, night_wakings }
+      : { ...entry, night_wakings_mode: "detailed", night_wakings_count: "", night_wakings_awake_mins: "", night_wakings };
     setEntry(updated);
     await doSave(updated, selectedDate);
   };
@@ -3130,7 +3178,15 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <h3 style={{ fontFamily: font.display, color: C.blue, margin: 0 }}>Naps</h3>
           {!isCoach && (
-            <button style={{ ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12 }} onClick={addNap}>+ Add nap</button>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                style={{ ...gStyle.btnPrimary, width: "auto", padding: "6px 12px", fontSize: 12 }}
+                onClick={startNapNow}
+              >
+                ▶ Start nap now
+              </button>
+              <button style={{ ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12 }} onClick={addNap}>+ Add nap</button>
+            </div>
           )}
         </div>
         {(entry.naps || []).map((nap, idx) => {
@@ -3171,6 +3227,23 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                   <TimeSelect value={nap.end} onChange={(v) => updateNap(idx, "end", v)} disabled={isCoach} placeholder="End…" />
                 </div>
               </div>
+              {!isCoach && (
+                <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                  <button type="button" onClick={() => updateNap(idx, "start", getCurrentTime())}
+                    style={{ ...gStyle.btnSecondary, flex: 1, padding: "8px 10px", fontSize: 12 }}>
+                    ▶ Start now
+                  </button>
+                  <button type="button" onClick={() => updateNap(idx, "end", getCurrentTime())}
+                    style={{ ...gStyle.btnSecondary, flex: 1, padding: "8px 10px", fontSize: 12 }}>
+                    ⏹ Stop now
+                  </button>
+                </div>
+              )}
+              {nap.start && !nap.end && (
+                <p style={{ fontSize: 12, color: C.blue, marginBottom: 10 }}>
+                  😴 Napping now — {fmtDuration(diffMins(parseTime(nap.start), parseTime(nowTick)))} so far
+                </p>
+              )}
               {napFlag && (
                 <div style={{
                   background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
@@ -3323,6 +3396,14 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
               }}>
               Log each waking
             </button>
+            {!isCoach && (
+              <button
+                onClick={logWakingNow}
+                style={{ ...gStyle.btnPrimary, width: "auto", padding: "6px 12px", fontSize: 12, marginLeft: "auto" }}
+              >
+                🌙 Log waking now
+              </button>
+            )}
           </div>
 
           {wakingMode === "simple" ? (
@@ -3382,6 +3463,23 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                         <TimeSelect value={w.back_asleep_at} onChange={(v) => updateWaking(idx, "back_asleep_at", v)} disabled={isCoach} placeholder="Time…" />
                       </div>
                     </div>
+                    {!isCoach && (
+                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                        <button type="button" onClick={() => updateWaking(idx, "woke_at", getCurrentTime())}
+                          style={{ ...gStyle.btnSecondary, flex: 1, padding: "8px 10px", fontSize: 12 }}>
+                          ▶ Woke now
+                        </button>
+                        <button type="button" onClick={() => updateWaking(idx, "back_asleep_at", getCurrentTime())}
+                          style={{ ...gStyle.btnSecondary, flex: 1, padding: "8px 10px", fontSize: 12 }}>
+                          ⏹ Asleep now
+                        </button>
+                      </div>
+                    )}
+                    {w.woke_at && !w.back_asleep_at && (
+                      <p style={{ fontSize: 12, color: C.blue, marginTop: 8 }}>
+                        👀 Awake now — {fmtDuration(diffMins(parseTime(w.woke_at), parseTime(nowTick)))} so far
+                      </p>
+                    )}
                     {wakeFlag && (
                       <div style={{
                         background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
