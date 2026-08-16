@@ -3559,6 +3559,18 @@ function SleepAnalysis({ client }) {
   const [loading, setLoading] = useState(true);
   const [iosHelpOpen, setIosHelpOpen] = useState(false);
 
+  // Date range filter — narrows the charts/summary/table to a window within the full diary.
+  const [rangeStart, setRangeStart] = useState("");
+  const [rangeEnd, setRangeEnd] = useState("");
+
+  // Compare mode — put a "before" and "after" period side by side for client-facing snapshots.
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [periodAStart, setPeriodAStart] = useState("");
+  const [periodAEnd, setPeriodAEnd] = useState("");
+  const [periodBStart, setPeriodBStart] = useState("");
+  const [periodBEnd, setPeriodBEnd] = useState("");
+  const [copied, setCopied] = useState(false);
+
   useEffect(() => {
     supabase.from("sleep_diary").select("*")
       .eq("client_id", client.id)
@@ -3645,15 +3657,83 @@ function SleepAnalysis({ client }) {
     const valid = arr.filter(v => v !== null && v > 0);
     return valid.length > 0 ? Math.round(valid.reduce((a,b) => a+b,0) / valid.length) : null;
   };
-  const avgNap      = avg(days.map(d => d.napMins));
-  const avgNight    = avg(days.map(d => d.nightMins));   // excludes Day 1 (no prev bed)
-  const avgTotal    = avg(days.map(d => d.totalMins));   // excludes any day without both
-  const avgNapCount = avg(days.map(d => d.napCount));
-  const avgWW       = avg(days.map(d => d.avgWW));
-  const avgNightWakings = avg(days.map(d => d.nightWakings));
 
-  // Count of complete days (for display)
-  const completeDays = days.filter(d => d.totalMins !== null).length;
+  // Builds the same set of averages for any subset of `days` — used for the
+  // main (date-range-filtered) view and for each side of the period comparison.
+  const summarize = (subset) => ({
+    avgNap:      avg(subset.map(d => d.napMins)),
+    avgNight:    avg(subset.map(d => d.nightMins)),
+    avgTotal:    avg(subset.map(d => d.totalMins)),
+    avgNapCount: avg(subset.map(d => d.napCount)),
+    avgWW:       avg(subset.map(d => d.avgWW)),
+    avgNightWakings: avg(subset.map(d => d.nightWakings)),
+    completeDays: subset.filter(d => d.totalMins !== null).length,
+    dayCount: subset.length,
+  });
+
+  // ── Date range filter — narrows which days feed the summary/charts/table ──
+  const minDate = days[0].date;
+  const maxDate = days[days.length - 1].date;
+  const effStart = rangeStart || minDate;
+  const effEnd   = rangeEnd   || maxDate;
+  const filteredDays = days.filter(d => d.date >= effStart && d.date <= effEnd);
+  const isFiltered = effStart !== minDate || effEnd !== maxDate;
+  const fmtDateLabel = (dstr) => new Date(dstr + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+
+  const applyPreset = (preset) => {
+    if (preset === "all") { setRangeStart(""); setRangeEnd(""); return; }
+    if (preset === "first7")  { setRangeStart(minDate); setRangeEnd(offsetDate(minDate, 6) > maxDate ? maxDate : offsetDate(minDate, 6)); return; }
+    if (preset === "last7")   { setRangeStart(offsetDate(maxDate, -6) < minDate ? minDate : offsetDate(maxDate, -6)); setRangeEnd(maxDate); return; }
+    if (preset === "first14") { setRangeStart(minDate); setRangeEnd(offsetDate(minDate, 13) > maxDate ? maxDate : offsetDate(minDate, 13)); return; }
+    if (preset === "last14")  { setRangeStart(offsetDate(maxDate, -13) < minDate ? minDate : offsetDate(maxDate, -13)); setRangeEnd(maxDate); return; }
+  };
+
+  const summary = summarize(filteredDays);
+  const { avgNap, avgNight, avgTotal, avgNapCount, avgWW, avgNightWakings, completeDays } = summary;
+
+  // ── Compare two periods (e.g. "when we started" vs "now") ─────────────────
+  const totalSpanDays = Math.max(0, daysBetween(minDate, maxDate));
+  const defaultWindow = Math.min(6, totalSpanDays); // 7-day window by default
+  const pAStart = periodAStart || minDate;
+  const pAEnd   = periodAEnd   || offsetDate(minDate, defaultWindow);
+  const pBStart = periodBStart || offsetDate(maxDate, -defaultWindow);
+  const pBEnd   = periodBEnd   || maxDate;
+  const periodADays = days.filter(d => d.date >= pAStart && d.date <= pAEnd);
+  const periodBDays = days.filter(d => d.date >= pBStart && d.date <= pBEnd);
+  const summaryA = summarize(periodADays);
+  const summaryB = summarize(periodBDays);
+
+  const compareMetrics = [
+    { key: "avgNightWakings", label: "Night wakings",       unit: "count", direction: "lower" },
+    { key: "avgNight",        label: "Night sleep",         unit: "mins",  direction: "higher" },
+    { key: "avgTotal",        label: "Total sleep (24h)",   unit: "mins",  direction: "higher" },
+    { key: "avgNap",          label: "Nap sleep",           unit: "mins",  direction: "higher" },
+    { key: "avgWW",           label: "Wake window",         unit: "mins",  direction: "neutral" },
+  ];
+  const fmtCompareVal = (v, unit) => v === null ? "—" : unit === "mins" ? fmtDuration(v) : `${v}×`;
+  const fmtCompareDelta = (d, unit) => {
+    if (d === null) return "—";
+    if (d === 0) return unit === "mins" ? "0m" : "0";
+    const sign = d > 0 ? "+" : "-";
+    return sign + (unit === "mins" ? fmtDuration(Math.abs(d)) : `${Math.abs(d)}`);
+  };
+
+  const headlineParts = [];
+  if (summaryA.avgNightWakings !== null && summaryB.avgNightWakings !== null) {
+    headlineParts.push(`average night wakings went from ${summaryA.avgNightWakings} to ${summaryB.avgNightWakings} times a night`);
+  }
+  if (summaryA.avgTotal !== null && summaryB.avgTotal !== null) {
+    headlineParts.push(`total sleep moved from ${fmtDuration(summaryA.avgTotal)} to ${fmtDuration(summaryB.avgTotal)} a day`);
+  }
+  const headline = headlineParts.length > 0 ? `With ${client.name}, ${headlineParts.join(", and ")}.` : "";
+  const copyHeadline = () => {
+    if (!headline) return;
+    try {
+      navigator.clipboard.writeText(headline);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  };
 
   // ── SVG line chart helper ─────────────────────────────────
   const LineChart = ({ data, color, label, yLabel }) => {
@@ -3731,49 +3811,49 @@ function SleepAnalysis({ client }) {
       label: "Total Nap Sleep",
       avg: avgNap,
       color: C.blue,
-      data: days.map(d => ({ label: d.label, value: d.napMins })),
+      data: filteredDays.map(d => ({ label: d.label, value: d.napMins })),
       yLabel: "mins",
     },
     {
       label: "Night Sleep",
       avg: avgNight,
       color: C.terracotta,
-      data: days.map(d => ({ label: d.label, value: d.nightMins })),
+      data: filteredDays.map(d => ({ label: d.label, value: d.nightMins })),
       yLabel: "mins",
     },
     {
       label: "Total Sleep in 24h",
       avg: avgTotal,
       color: C.gold,
-      data: days.map(d => ({ label: d.label, value: d.totalMins })),
+      data: filteredDays.map(d => ({ label: d.label, value: d.totalMins })),
       yLabel: "mins",
     },
     {
       label: "Number of Naps",
       avg: avgNapCount,
       color: C.blueDark,
-      data: days.map(d => ({ label: d.label, value: d.napCount })),
+      data: filteredDays.map(d => ({ label: d.label, value: d.napCount })),
       yLabel: "naps",
     },
     {
       label: "Average Wake Window",
       avg: avgWW,
       color: C.terracottaDark,
-      data: days.map(d => ({ label: d.label, value: d.avgWW })),
+      data: filteredDays.map(d => ({ label: d.label, value: d.avgWW })),
       yLabel: "mins",
     },
     {
       label: "Night Wakings",
       avg: avgNightWakings,
       color: C.blueDark,
-      data: days.map(d => ({ label: d.label, value: d.nightWakings })),
+      data: filteredDays.map(d => ({ label: d.label, value: d.nightWakings })),
       yLabel: "wakings",
     },
     {
       label: "Morning Wake Time",
       avg: null,
       color: C.gold,
-      data: days.map(d => ({
+      data: filteredDays.map(d => ({
         label: d.label,
         value: d.wakeTime ? parseTime(d.wakeTime) : null,
         displayValue: d.wakeTime ? (() => { const p = parse24ToWheel(d.wakeTime); return p.h !== null ? `${p.h}:${String(p.m).padStart(2,"0")} ${p.ampm.toUpperCase()}` : d.wakeTime; })() : null,
@@ -3784,7 +3864,7 @@ function SleepAnalysis({ client }) {
       label: "Time Went to Sleep",
       avg: null,
       color: C.terracottaDark,
-      data: days.map(d => ({
+      data: filteredDays.map(d => ({
         label: d.label,
         value: d.bedTime ? parseTime(d.bedTime) : null,
         displayValue: d.bedTime ? (() => { const p = parse24ToWheel(d.bedTime); return p.h !== null ? `${p.h}:${String(p.m).padStart(2,"0")} ${p.ampm.toUpperCase()}` : d.bedTime; })() : null,
@@ -3803,7 +3883,7 @@ function SleepAnalysis({ client }) {
             Sleep Analysis
           </h2>
           <p style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>
-            {entries.length} days logged · {completeDays} complete · averages exclude incomplete days
+            {filteredDays.length} of {days.length} days logged shown · {completeDays} complete · averages exclude incomplete days
           </p>
         </div>
         <button
@@ -3819,9 +3899,136 @@ function SleepAnalysis({ client }) {
         <div style={{ fontFamily: font.display, fontSize: 24, color: C.terracotta }}>Signs for Sleep</div>
         <div style={{ fontSize: 12, color: C.gold, letterSpacing: "0.05em" }}>Supporting sleep through connection and communication.</div>
         <div style={{ marginTop: 8, fontSize: 16, fontWeight: 700 }}>Sleep Analysis — {client.name}</div>
-        <div style={{ fontSize: 12, color: C.muted }}>Generated {new Date().toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })}</div>
+        <div style={{ fontSize: 12, color: C.muted }}>Showing {fmtDateLabel(effStart)} – {fmtDateLabel(effEnd)} · Generated {new Date().toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })}</div>
         <hr style={{ borderColor: C.border, margin: "12px 0" }} />
       </div>
+
+      {/* Date range filter */}
+      <div className="no-print" style={{ ...gStyle.card, marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 14 }}>
+          <div>
+            <label style={gStyle.label}>Date range</label>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input type="date" style={gStyle.input} value={effStart}
+                min={minDate} max={effEnd}
+                onChange={(e) => setRangeStart(e.target.value)} />
+              <span style={{ color: C.muted, fontSize: 13 }}>to</span>
+              <input type="date" style={gStyle.input} value={effEnd}
+                min={effStart} max={maxDate}
+                onChange={(e) => setRangeEnd(e.target.value)} />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {[
+              { label: "All time", fn: "all" },
+              { label: "First 7 days", fn: "first7" },
+              { label: "Last 7 days", fn: "last7" },
+              { label: "First 14 days", fn: "first14" },
+              { label: "Last 14 days", fn: "last14" },
+            ].map(p => (
+              <button key={p.label} onClick={() => applyPreset(p.fn)}
+                style={{ ...gStyle.btnSecondary, padding: "8px 14px", fontSize: 12 }}>
+                {p.label}
+              </button>
+            ))}
+            <button onClick={() => setCompareOpen(o => !o)}
+              style={{ ...gStyle.btnGold, padding: "8px 14px", fontSize: 12 }}>
+              {compareOpen ? "Hide comparison" : "📊 Compare periods"}
+            </button>
+          </div>
+        </div>
+        {isFiltered && (
+          <p style={{ fontSize: 12, color: C.terracotta, marginTop: 12, marginBottom: 0 }}>
+            Showing a custom range — {fmtDateLabel(effStart)} to {fmtDateLabel(effEnd)} ({filteredDays.length} days).{" "}
+            <button onClick={() => applyPreset("all")}
+              style={{ background: "none", border: "none", color: C.terracotta, textDecoration: "underline", cursor: "pointer", fontSize: 12, padding: 0 }}>
+              Reset to all time
+            </button>
+          </p>
+        )}
+      </div>
+
+      {/* Compare two periods — e.g. "when we started" vs "now" */}
+      {compareOpen && (
+        <div style={{ ...gStyle.card, marginBottom: 24, background: C.cream }}>
+          <h3 style={{ fontFamily: font.display, color: C.dark, margin: "0 0 4px", fontSize: 16 }}>
+            Compare Two Periods
+          </h3>
+          <p style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>
+            Pick a "before" and "after" window to show a client's progress at a glance.
+          </p>
+
+          <div className="no-print" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 18 }}>
+            <div>
+              <label style={{ ...gStyle.label, color: C.blueDark }}>Period A — before</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input type="date" style={gStyle.input} value={pAStart}
+                  min={minDate} max={pAEnd}
+                  onChange={(e) => setPeriodAStart(e.target.value)} />
+                <input type="date" style={gStyle.input} value={pAEnd}
+                  min={pAStart} max={maxDate}
+                  onChange={(e) => setPeriodAEnd(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label style={{ ...gStyle.label, color: C.terracottaDark }}>Period B — after</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input type="date" style={gStyle.input} value={pBStart}
+                  min={minDate} max={pBEnd}
+                  onChange={(e) => setPeriodBStart(e.target.value)} />
+                <input type="date" style={gStyle.input} value={pBEnd}
+                  min={pBStart} max={maxDate}
+                  onChange={(e) => setPeriodBEnd(e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 14px", background: C.cream, fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              <div>Metric</div>
+              <div style={{ textAlign: "right" }}>Before</div>
+              <div style={{ textAlign: "right" }}>After</div>
+              <div style={{ textAlign: "right" }}>Change</div>
+            </div>
+            {compareMetrics.map((m, i) => {
+              const aVal = summaryA[m.key];
+              const bVal = summaryB[m.key];
+              const d = (aVal !== null && bVal !== null) ? bVal - aVal : null;
+              const improved = d !== null && d !== 0 && m.direction !== "neutral" && (m.direction === "lower" ? d < 0 : d > 0);
+              const worsened = d !== null && d !== 0 && m.direction !== "neutral" && (m.direction === "lower" ? d > 0 : d < 0);
+              const deltaColor = improved ? C.success : worsened ? C.danger : C.mid;
+              const pct = (aVal && bVal !== null && aVal !== 0) ? Math.round(((bVal - aVal) / aVal) * 100) : null;
+              return (
+                <div key={m.key} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 14px", borderTop: `1px solid ${C.border}`, fontSize: 13, background: i % 2 === 0 ? C.white : C.cream, alignItems: "center" }}>
+                  <div style={{ color: C.dark, fontWeight: 600 }}>{m.label}</div>
+                  <div style={{ textAlign: "right", color: C.blueDark }}>{fmtCompareVal(aVal, m.unit)}</div>
+                  <div style={{ textAlign: "right", color: C.terracottaDark, fontWeight: 700 }}>{fmtCompareVal(bVal, m.unit)}</div>
+                  <div style={{ textAlign: "right", color: deltaColor, fontWeight: 700 }}>
+                    {fmtCompareDelta(d, m.unit)}{pct !== null && d !== 0 ? ` (${pct > 0 ? "+" : ""}${pct}%)` : ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <p style={{ fontSize: 11, color: C.muted, marginTop: 10 }}>
+            Before: {fmtDateLabel(pAStart)} – {fmtDateLabel(pAEnd)} · {periodADays.length} days logged ({summaryA.completeDays} complete) &nbsp;|&nbsp;
+            After: {fmtDateLabel(pBStart)} – {fmtDateLabel(pBEnd)} · {periodBDays.length} days logged ({summaryB.completeDays} complete)
+          </p>
+
+          {headline && (
+            <div style={{ marginTop: 16, background: C.terracottaLight, borderRadius: 10, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 14, color: C.terracottaDark, fontStyle: "italic", lineHeight: 1.5 }}>
+                "{headline}"
+              </div>
+              <button className="no-print" style={{ ...gStyle.btnSecondary, whiteSpace: "nowrap", flexShrink: 0 }}
+                onClick={copyHeadline}>
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Summary cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px,1fr))", gap: 12, marginBottom: 28 }}>
@@ -3831,7 +4038,7 @@ function SleepAnalysis({ client }) {
           { label: "Avg total 24h", value: fmtDuration(avgTotal), color: C.gold, sub: "all sleep" },
           { label: "Avg wake window", value: fmtDuration(avgWW), color: C.blueDark, sub: "between sleeps" },
           { label: "Avg night wakings", value: avgNightWakings !== null ? avgNightWakings : "—", color: C.terracottaDark, sub: "times per night" },
-          { label: "Days logged", value: entries.length, color: C.mid, sub: `${completeDays} complete` },
+          { label: "Days in range", value: filteredDays.length, color: C.mid, sub: `${completeDays} complete` },
         ].map((s) => (
           <div key={s.label} style={{
             background: C.white, border: `1px solid ${C.border}`,
@@ -3880,7 +4087,7 @@ function SleepAnalysis({ client }) {
               </tr>
             </thead>
             <tbody>
-              {days.map((d, i) => (
+              {filteredDays.map((d, i) => (
                 <tr key={d.date} style={{ borderBottom: `1px solid ${C.border}`, background: i % 2 === 0 ? C.white : C.cream }}>
                   <td style={{ padding: "8px 10px", fontWeight: 600, color: C.dark }}>{d.label}</td>
                   <td style={{ padding: "8px 10px", color: C.gold }}>
