@@ -1601,7 +1601,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
       {tab === "overview" && <ClientOverview client={clientData} onRefresh={refresh} />}
       {tab === "intake" && <IntakeViewer clientId={client.id} />}
       {tab === "diary" && <SleepDiaryViewer clientId={client.id} isCoach />}
-      {tab === "analysis" && <SleepAnalysis client={clientData} />}
+      {tab === "analysis" && <SleepAnalysis client={clientData} isCoach />}
       {tab === "plan" && <SleepPlanEditor clientId={client.id} clientData={clientData} isCoach={true} />}
       {tab === "progress" && <ProgressTab clientId={client.id} clientData={clientData} isCoach={true} />}
       {tab === "toolbox" && <KnowledgeToolbox clientId={client.id} clientData={clientData} isCoach={true} />}
@@ -2268,7 +2268,7 @@ function ClientApp({ session, onLogout }) {
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
         {tab === "diary" && <SleepDiaryViewer clientId={session.clientId} isCoach={false} consultBooked={clientPackage?.consult_booked} />}
         {tab === "package" && <YourPackageTab clientPackage={clientPackage} />}
-        {tab === "analysis" && <SleepAnalysis client={{ id: session.clientId, name: session.clientName }} />}
+        {tab === "analysis" && <SleepAnalysis client={{ id: session.clientId, name: session.clientName }} isCoach={false} />}
         {tab === "progress" && <ProgressTab clientId={session.clientId} isCoach={false} />}
         {tab === "plan" && <SleepPlanEditor clientId={session.clientId} isCoach={false} />}
         {tab === "toolbox" && <KnowledgeToolbox clientId={session.clientId} isCoach={false} />}
@@ -3554,7 +3554,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
 }
 
 // ── SLEEP ANALYSIS ───────────────────────────────────────────────────────────
-function SleepAnalysis({ client }) {
+function SleepAnalysis({ client, isCoach }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [iosHelpOpen, setIosHelpOpen] = useState(false);
@@ -3931,10 +3931,12 @@ function SleepAnalysis({ client }) {
                 {p.label}
               </button>
             ))}
-            <button onClick={() => setCompareOpen(o => !o)}
-              style={{ ...gStyle.btnGold, padding: "8px 14px", fontSize: 12 }}>
-              {compareOpen ? "Hide comparison" : "📊 Compare periods"}
-            </button>
+            {isCoach && (
+              <button onClick={() => setCompareOpen(o => !o)}
+                style={{ ...gStyle.btnGold, padding: "8px 14px", fontSize: 12 }}>
+                {compareOpen ? "Hide comparison" : "📊 Compare periods"}
+              </button>
+            )}
           </div>
         </div>
         {isFiltered && (
@@ -3948,8 +3950,8 @@ function SleepAnalysis({ client }) {
         )}
       </div>
 
-      {/* Compare two periods — e.g. "when we started" vs "now" */}
-      {compareOpen && (
+      {/* Compare two periods — e.g. "when we started" vs "now" — coach-only */}
+      {isCoach && compareOpen && (
         <div style={{ ...gStyle.card, marginBottom: 24, background: C.cream }}>
           <h3 style={{ fontFamily: font.display, color: C.dark, margin: "0 0 4px", fontSize: 16 }}>
             Compare Two Periods
@@ -3996,7 +3998,10 @@ function SleepAnalysis({ client }) {
               const d = (aVal !== null && bVal !== null) ? bVal - aVal : null;
               const improved = d !== null && d !== 0 && m.direction !== "neutral" && (m.direction === "lower" ? d < 0 : d > 0);
               const worsened = d !== null && d !== 0 && m.direction !== "neutral" && (m.direction === "lower" ? d > 0 : d < 0);
-              const deltaColor = improved ? C.success : worsened ? C.danger : C.mid;
+              // "Worsened" doesn't always mean worse (e.g. less nap sleep can be a good sign as
+              // night sleep consolidates), so this uses the neutral blue rather than red/danger
+              // to avoid implying a false negative.
+              const deltaColor = improved ? C.success : worsened ? C.blue : C.mid;
               const pct = (aVal && bVal !== null && aVal !== 0) ? Math.round(((bVal - aVal) / aVal) * 100) : null;
               return (
                 <div key={m.key} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 14px", borderTop: `1px solid ${C.border}`, fontSize: 13, background: i % 2 === 0 ? C.white : C.cream, alignItems: "center" }}>
