@@ -1,3 +1,4 @@
+
 // Signs for Sleep - Practice Management App
 // Stack: React (single component) + Supabase
 // Replace SUPABASE_URL and SUPABASE_ANON_KEY with your actual values
@@ -2589,7 +2590,7 @@ const PACKAGES = {
 };
 const EXTENSION = { label: "Extension Week", days: 7, calls: 1, price: "$175" };
 
-const emptyNap = () => ({ start: "", end: "", how_fell_asleep: "", location: "", resettled: "", notes: "" });
+const emptyNap = () => ({ routine_start: "", start: "", end: "", how_fell_asleep: "", location: "", resettled: "", notes: "" });
 const emptyWaking = () => ({ woke_at: "", back_asleep_at: "" });
 // Sums completed wake→back-asleep pairs to derive a count + total minutes awake.
 // Used when a client chooses to log each night waking individually rather than
@@ -3200,6 +3201,16 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           const prevNapEnd = idx > 0 && entry.naps[idx - 1]?.end ? entry.naps[idx - 1].end : null;
           const wwFromPrev = prevNapEnd && nap.start
             ? diffMins(parseTime(prevNapEnd), parseTime(nap.start)) : null;
+          // How long they tried to settle this nap for — routine start until
+          // actually asleep — mirrors the bedtime routine's settle window so
+          // an extended, difficult nap attempt is just as visible as one at
+          // bedtime. Uses a plain forward difference (not diffMins' overnight
+          // wraparound) since a nap attempt never crosses midnight — a
+          // negative result here means the times were entered the wrong way
+          // round, so it's left unshown rather than wrapped into a bogus ~24h.
+          const rawSettleMins = nap.routine_start && nap.start
+            ? parseTime(nap.start) - parseTime(nap.routine_start) : null;
+          const settleMins = rawSettleMins !== null && rawSettleMins >= 0 ? rawSettleMins : null;
 
           return (
             <div key={idx} style={{ borderTop: idx > 0 ? `1px solid ${C.border}` : "none", paddingTop: idx > 0 ? 16 : 0, marginTop: idx > 0 ? 16 : 0 }}>
@@ -3215,6 +3226,15 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
               {(ww !== null || wwFromPrev !== null) && (
                 <p style={{ fontSize: 12, color: C.gold, marginBottom: 8 }}>
                   ⏱ Wake window: {fmtDuration(ww ?? wwFromPrev)} {idx === 0 ? "since wake" : "since last nap"}
+                </p>
+              )}
+              <div style={{ marginBottom: 10 }}>
+                <label style={gStyle.label}>Nap routine started</label>
+                <TimeSelect value={nap.routine_start} onChange={(v) => updateNap(idx, "routine_start", v)} disabled={isCoach} placeholder="Select time…" />
+              </div>
+              {settleMins !== null && (
+                <p style={{ fontSize: 12, color: C.gold, marginBottom: 8 }}>
+                  ⏱ Took {fmtDuration(settleMins)} to fall asleep
                 </p>
               )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
