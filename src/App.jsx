@@ -335,27 +335,6 @@ const fmtDuration = (mins) => {
   return `${h}h ${m}m`;
 };
 
-// Word-wraps text onto a Canvas 2D context, one fillText call per line.
-// Used by the Compare Periods "download image" export — kept dependency-free
-// (no html2canvas etc.) since this file has no build step to add packages to.
-function canvasWrapText(ctx, text, x, y, maxWidth, lineHeight) {
-  const words = text.split(" ");
-  let line = "";
-  let curY = y;
-  for (let n = 0; n < words.length; n++) {
-    const testLine = line + words[n] + " ";
-    if (ctx.measureText(testLine).width > maxWidth && n > 0) {
-      ctx.fillText(line, x, curY);
-      line = words[n] + " ";
-      curY += lineHeight;
-    } else {
-      line = testLine;
-    }
-  }
-  ctx.fillText(line, x, curY);
-  return curY + lineHeight;
-}
-
 // Flips a 24-hour "HH:MM" between AM and PM (09:15 <-> 21:15).
 const flipAmPm = (t) => {
   const mins = parseTime(t);
@@ -2683,6 +2662,7 @@ const emptyEntry = () => ({
   daytime_notes: "",
   naps: [emptyNap()],
   tags: [],
+  exclude_from_analysis: false,
 });
 
 // Context tags for a diary day — explains an otherwise-confusing rough night
@@ -3044,7 +3024,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           .eq("client_id", clientId).eq("date", offsetDate(selectedDate, +1)).maybeSingle(),
       ]);
       if (!cancelled) {
-        setEntry(data ? { ...data, naps: data.naps || [emptyNap()], night_wakings: data.night_wakings || [], night_wakings_mode: data.night_wakings_mode || "simple", tags: data.tags || [] } : emptyEntry());
+        setEntry(data ? { ...data, naps: data.naps || [emptyNap()], night_wakings: data.night_wakings || [], night_wakings_mode: data.night_wakings_mode || "simple", tags: data.tags || [], exclude_from_analysis: data.exclude_from_analysis || false } : emptyEntry());
         setAdjTimes({
           prevBedTime: prevDay?.bed_time ? prevDay.bed_time.slice(0, 5) : null,
           nextWakeTime: nextDay?.wake_time ? nextDay.wake_time.slice(0, 5) : null,
@@ -3106,6 +3086,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
       night_wakings: rest.night_wakings || [],
       daytime_notes: rest.daytime_notes || null,
       tags: rest.tags || [],
+      exclude_from_analysis: rest.exclude_from_analysis || false,
       total_nap_mins: totalNapMins,
       night_sleep_mins: nightSleep,
       total_sleep_24h: total24h,
@@ -3879,6 +3860,42 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           onChange={(v) => update("notes", v)} disabled={isCoach} />
       </div>
 
+      {/* Exclude this day from analysis — saved on the diary row itself
+          (not an ephemeral view-only choice) so it's set right when the
+          rough day happens and shows up for both sides regardless of who's
+          looking at the Analysis tab later. Either side can toggle it. */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+        background: entry.exclude_from_analysis ? T.dangerLight : T.white,
+        border: `1px solid ${entry.exclude_from_analysis ? T.danger : T.border}`,
+        borderRadius: 12, padding: "14px 18px", marginBottom: 20,
+      }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 13, color: entry.exclude_from_analysis ? T.danger : T.dark }}>
+            🚫 Exclude this day from data analysis
+          </div>
+          <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>
+            Leaves this day out of averages, charts and comparisons on the Analysis tab — e.g. illness, travel, or an otherwise off day.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => update("exclude_from_analysis", !entry.exclude_from_analysis)}
+          aria-label="Toggle exclude this day from analysis"
+          style={{
+            flexShrink: 0, width: 46, height: 26, borderRadius: 13, border: "none", cursor: "pointer",
+            background: entry.exclude_from_analysis ? T.danger : "rgba(107,143,168,0.3)",
+            position: "relative",
+          }}
+        >
+          <span style={{
+            position: "absolute", top: 3, left: entry.exclude_from_analysis ? 23 : 3,
+            width: 20, height: 20, borderRadius: "50%", background: "#FFFFFF",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+          }} />
+        </button>
+      </div>
+
       {/* Date nav (bottom) */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 20, marginBottom: 20 }}>
         <button onClick={() => changeDate(-1)} style={{ ...gStyle.btnSecondary, padding: "8px 14px" }}>←</button>
@@ -3910,20 +3927,6 @@ function SleepAnalysis({ client, isCoach }) {
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
 
-  // Days manually excluded from the numbers below (illness, travel, an
-  // otherwise-not-a-normal-day) — an ephemeral, per-session choice like the
-  // date-range presets, not saved to Supabase, so it resets next visit rather
-  // than permanently hiding data. Available to coach and client alike.
-  const [excludedDates, setExcludedDates] = useState(new Set());
-  const [excludeOpen, setExcludeOpen] = useState(false);
-  const toggleExcludeDate = (date) => {
-    setExcludedDates(prev => {
-      const next = new Set(prev);
-      if (next.has(date)) next.delete(date); else next.add(date);
-      return next;
-    });
-  };
-
   // Compare mode — put a "before" and "after" period side by side for client-facing snapshots.
   const [compareOpen, setCompareOpen] = useState(false);
   const [periodAStart, setPeriodAStart] = useState("");
@@ -3931,6 +3934,10 @@ function SleepAnalysis({ client, isCoach }) {
   const [periodBStart, setPeriodBStart] = useState("");
   const [periodBEnd, setPeriodBEnd] = useState("");
   const [copied, setCopied] = useState(false);
+  const [shared, setShared] = useState(false);
+  // The comparison table most recently shared with this client (client view only) —
+  // fetched from Supabase, not the coach's live-edited period pickers.
+  const [sharedComparison, setSharedComparison] = useState(null);
 
   useEffect(() => {
     supabase.from("sleep_diary").select("*")
@@ -3941,6 +3948,15 @@ function SleepAnalysis({ client, isCoach }) {
         setLoading(false);
       });
   }, [client.id]);
+
+  // Pulls whatever comparison was last shared — rendered read-only on the
+  // client side, and used on the coach side just to show "last shared at…".
+  const loadSharedComparison = () => {
+    supabase.from("shared_comparisons").select("*")
+      .eq("client_id", client.id).maybeSingle()
+      .then(({ data }) => setSharedComparison(data || null));
+  };
+  useEffect(() => { loadSharedComparison(); }, [client.id]);
 
   if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading analysis…</p>;
   if (entries.length === 0) return (
@@ -4009,8 +4025,14 @@ function SleepAnalysis({ client, isCoach }) {
       nightMins: backwardNightMins,
       totalMins,
       napCount, avgWW, nightWakings, wakeTime, bedTime,
+      excluded: !!e.exclude_from_analysis,
+      tags: e.tags || [],
     };
   });
+
+  // Plain-text labels for a day's context tags, e.g. "Unwell, Teething" —
+  // no emoji here, this feeds the Daily Breakdown table column.
+  const tagLabels = (tags) => (tags || []).map(k => DIARY_TAGS.find(t => t.key === k)?.label).filter(Boolean).join(", ");
 
   // ── Averages — Option D: exclude incomplete days (null values) ────────────
   const avg = (arr) => {
@@ -4035,10 +4057,13 @@ function SleepAnalysis({ client, isCoach }) {
   // ── Date range filter — narrows which days feed the summary/charts/table ──
   // minDate/maxDate stay based on the FULL history (unaffected by excluded
   // days) so the date pickers/presets keep their normal bounds; the exclusion
-  // only removes those days from the actual calculations below.
+  // only removes those days from the actual calculations below. "Excluded"
+  // is now the `exclude_from_analysis` flag saved on the diary row itself
+  // (toggled in the Sleep Diary tab) rather than a view-only selection here.
   const minDate = days[0].date;
   const maxDate = days[days.length - 1].date;
-  const activeDays = days.filter(d => !excludedDates.has(d.date));
+  const activeDays = days.filter(d => !d.excluded);
+  const excludedCount = days.length - activeDays.length;
   const effStart = rangeStart || minDate;
   const effEnd   = rangeEnd   || maxDate;
   const filteredDays = activeDays.filter(d => d.date >= effStart && d.date <= effEnd);
@@ -4130,47 +4155,22 @@ function SleepAnalysis({ client, isCoach }) {
     } catch {}
   };
 
-  // Branded, shareable PNG of the headline — built directly on a <canvas>
-  // rather than pulling in an html-to-image library, since this file has no
-  // build step to install one into. Gives Chloé something she can text/share
-  // instead of a screenshot of the app chrome.
-  const downloadHeadlineImage = () => {
-    if (!headline) return;
-    const W = 1200, H = 630;
-    const canvas = document.createElement("canvas");
-    canvas.width = W; canvas.height = H;
-    const ctx = canvas.getContext("2d");
-
-    ctx.fillStyle = C.cream;
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = C.terracotta;
-    ctx.fillRect(0, 0, W, 14);
-
-    ctx.fillStyle = C.terracotta;
-    ctx.font = "700 40px Georgia, serif";
-    ctx.fillText("Signs for Sleep", 64, 100);
-    ctx.fillStyle = C.gold;
-    ctx.font = "600 14px 'DM Sans', sans-serif";
-    ctx.fillText("SUPPORTING SLEEP THROUGH CONNECTION AND COMMUNICATION", 64, 126);
-
-    ctx.fillStyle = C.dark;
-    ctx.font = "italic 32px Georgia, serif";
-    canvasWrapText(ctx, `"${headline}"`, 64, 230, W - 128, 44);
-
-    ctx.fillStyle = C.mid;
-    ctx.font = "16px 'DM Sans', sans-serif";
-    ctx.fillText(`Before: ${fmtDateLabel(pAStart)} – ${fmtDateLabel(pAEnd)}    →    After: ${fmtDateLabel(pBStart)} – ${fmtDateLabel(pBEnd)}`, 64, H - 64);
-    ctx.fillText(`For ${client.name}`, 64, H - 36);
-
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${(client.name || "client").replace(/\s+/g, "_")}_sleep_progress.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
+  // Pushes the current Period A/B comparison table (not just the headline)
+  // to the client's own Analysis tab, replacing whatever was shared before —
+  // one row per client (upsert on client_id), so there's always exactly one
+  // "current" shared snapshot rather than a growing history.
+  const shareWithClient = async () => {
+    await supabase.from("shared_comparisons").upsert({
+      client_id: client.id,
+      period_a_start: pAStart, period_a_end: pAEnd,
+      period_b_start: pBStart, period_b_end: pBEnd,
+      summary_a: summaryA, summary_b: summaryB,
+      headline: headline || null,
+      shared_at: new Date().toISOString(),
+    }, { onConflict: "client_id" });
+    setShared(true);
+    loadSharedComparison();
+    setTimeout(() => setShared(false), 1500);
   };
 
   // ── SVG line chart helper ─────────────────────────────────
@@ -4321,7 +4321,7 @@ function SleepAnalysis({ client, isCoach }) {
             Sleep Analysis
           </h2>
           <p style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>
-            {filteredDays.length} of {days.length} days logged shown{excludedDates.size > 0 ? ` (${excludedDates.size} excluded)` : ""} · {completeDays} complete · averages exclude incomplete days
+            {filteredDays.length} of {days.length} days logged shown{excludedCount > 0 ? ` (${excludedCount} excluded — see the Sleep Diary tab)` : ""} · {completeDays} complete · averages exclude incomplete days
           </p>
         </div>
         <button
@@ -4369,10 +4369,6 @@ function SleepAnalysis({ client, isCoach }) {
                 {p.label}
               </button>
             ))}
-            <button onClick={() => setExcludeOpen(o => !o)}
-              style={{ ...gStyle.btnSecondary, padding: "8px 14px", fontSize: 12 }}>
-              {excludedDates.size > 0 ? `🚫 ${excludedDates.size} day${excludedDates.size !== 1 ? "s" : ""} excluded` : "Exclude specific days"}
-            </button>
             {isCoach && (
               <button onClick={() => setCompareOpen(o => !o)}
                 style={{ ...gStyle.btnGold, padding: "8px 14px", fontSize: 12 }}>
@@ -4390,43 +4386,10 @@ function SleepAnalysis({ client, isCoach }) {
             </button>
           </p>
         )}
-
-        {/* Exclude specific days — a temporary, per-visit choice (nothing is
-            saved), same idea as the preset buttons above but for individual
-            days rather than a range. Useful for illness, travel, or any day
-            that isn't representative and would otherwise skew the averages. */}
-        {excludeOpen && (
-          <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
-            <p style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
-              Tap any day to leave it out of the averages, charts and table below (and out of Compare Periods) — this isn't saved, so it resets next time you open this tab. Days tagged in the diary are marked for reference.
-            </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto" }}>
-              {days.filter(d => d.date >= effStart && d.date <= effEnd).map((d) => {
-                const excluded = excludedDates.has(d.date);
-                const dayTags = (entries.find(e => e.date === d.date)?.tags || []);
-                const emoji = dayTags.length > 0 ? DIARY_TAGS.find(t => t.key === dayTags[0])?.emoji : null;
-                return (
-                  <button key={d.date} onClick={() => toggleExcludeDate(d.date)}
-                    style={{
-                      padding: "6px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
-                      border: `1px solid ${excluded ? C.danger : C.border}`,
-                      background: excluded ? C.dangerLight : C.white,
-                      color: excluded ? C.danger : C.mid,
-                      textDecoration: excluded ? "line-through" : "none",
-                    }}
-                  >
-                    {emoji ? `${emoji} ` : ""}{d.label}
-                  </button>
-                );
-              })}
-            </div>
-            {excludedDates.size > 0 && (
-              <button onClick={() => setExcludedDates(new Set())}
-                style={{ marginTop: 10, background: "none", border: "none", color: C.terracotta, textDecoration: "underline", cursor: "pointer", fontSize: 12, padding: 0 }}>
-                Clear all exclusions
-              </button>
-            )}
-          </div>
+        {excludedCount > 0 && (
+          <p style={{ fontSize: 12, color: C.danger, marginTop: 12, marginBottom: 0 }}>
+            🚫 {excludedCount} day{excludedCount !== 1 ? "s" : ""} excluded from the numbers below — toggled from the Sleep Diary tab on the day in question.
+          </p>
         )}
       </div>
 
@@ -4436,6 +4399,58 @@ function SleepAnalysis({ client, isCoach }) {
           <p style={{ fontSize: 14, color: C.blueDark, lineHeight: 1.5, margin: 0, fontStyle: "italic" }}>
             💡 {insightSentence}
           </p>
+        </div>
+      )}
+
+      {/* Client view of whatever comparison Chloé last shared — a fixed
+          snapshot from the database, independent of the date-range filter
+          above, using the same table layout as her Compare Periods tool. */}
+      {!isCoach && sharedComparison && (
+        <div style={{ ...gStyle.card, marginBottom: 24, background: C.cream }}>
+          <h3 style={{ fontFamily: font.display, color: C.dark, margin: "0 0 4px", fontSize: 16 }}>
+            Your Progress
+          </h3>
+          <p style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>
+            Shared by Chloé on {new Date(sharedComparison.shared_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+          </p>
+          <div style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 14px", background: C.cream, fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              <div>Metric</div>
+              <div style={{ textAlign: "right" }}>Before</div>
+              <div style={{ textAlign: "right" }}>After</div>
+              <div style={{ textAlign: "right" }}>Change</div>
+            </div>
+            {compareMetrics.map((m, i) => {
+              const aVal = sharedComparison.summary_a?.[m.key] ?? null;
+              const bVal = sharedComparison.summary_b?.[m.key] ?? null;
+              const d = (aVal !== null && bVal !== null) ? bVal - aVal : null;
+              const improved = d !== null && d !== 0 && m.direction !== "neutral" && (m.direction === "lower" ? d < 0 : d > 0);
+              const worsened = d !== null && d !== 0 && m.direction !== "neutral" && (m.direction === "lower" ? d > 0 : d < 0);
+              const deltaColor = improved ? C.success : worsened ? C.blue : C.mid;
+              const pct = (aVal && bVal !== null && aVal !== 0) ? Math.round(((bVal - aVal) / aVal) * 100) : null;
+              return (
+                <div key={m.key} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 14px", borderTop: `1px solid ${C.border}`, fontSize: 13, background: i % 2 === 0 ? C.white : C.cream, alignItems: "center" }}>
+                  <div style={{ color: C.dark, fontWeight: 600 }}>{m.label}</div>
+                  <div style={{ textAlign: "right", color: C.blueDark }}>{fmtCompareVal(aVal, m.unit)}</div>
+                  <div style={{ textAlign: "right", color: C.terracottaDark, fontWeight: 700 }}>{fmtCompareVal(bVal, m.unit)}</div>
+                  <div style={{ textAlign: "right", color: deltaColor, fontWeight: 700 }}>
+                    {fmtCompareDelta(d, m.unit)}{pct !== null && d !== 0 ? ` (${pct > 0 ? "+" : ""}${pct}%)` : ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p style={{ fontSize: 11, color: C.muted, marginTop: 10 }}>
+            Before: {fmtDateLabel(sharedComparison.period_a_start)} – {fmtDateLabel(sharedComparison.period_a_end)} &nbsp;|&nbsp;
+            After: {fmtDateLabel(sharedComparison.period_b_start)} – {fmtDateLabel(sharedComparison.period_b_end)}
+          </p>
+          {sharedComparison.headline && (
+            <div style={{ marginTop: 16, background: C.terracottaLight, borderRadius: 10, padding: "14px 16px" }}>
+              <div style={{ fontSize: 14, color: C.terracottaDark, fontStyle: "italic", lineHeight: 1.5 }}>
+                "{sharedComparison.headline}"
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -4505,26 +4520,30 @@ function SleepAnalysis({ client, isCoach }) {
             })}
           </div>
 
-          <p style={{ fontSize: 11, color: C.muted, marginTop: 10 }}>
-            Before: {fmtDateLabel(pAStart)} – {fmtDateLabel(pAEnd)} · {periodADays.length} days logged ({summaryA.completeDays} complete) &nbsp;|&nbsp;
-            After: {fmtDateLabel(pBStart)} – {fmtDateLabel(pBEnd)} · {periodBDays.length} days logged ({summaryB.completeDays} complete)
-          </p>
+          <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginTop: 10 }}>
+            <p style={{ fontSize: 11, color: C.muted, margin: 0 }}>
+              Before: {fmtDateLabel(pAStart)} – {fmtDateLabel(pAEnd)} · {periodADays.length} days logged ({summaryA.completeDays} complete) &nbsp;|&nbsp;
+              After: {fmtDateLabel(pBStart)} – {fmtDateLabel(pBEnd)} · {periodBDays.length} days logged ({summaryB.completeDays} complete)
+            </p>
+            <button style={{ ...gStyle.btnGold, whiteSpace: "nowrap", flexShrink: 0 }} onClick={shareWithClient}>
+              {shared ? "Shared!" : "📤 Share with client"}
+            </button>
+          </div>
+          {sharedComparison && (
+            <p className="no-print" style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+              Client last saw this comparison shared {new Date(sharedComparison.shared_at).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}.
+            </p>
+          )}
 
           {headline && (
             <div style={{ marginTop: 16, background: C.terracottaLight, borderRadius: 10, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div style={{ fontSize: 14, color: C.terracottaDark, fontStyle: "italic", lineHeight: 1.5 }}>
                 "{headline}"
               </div>
-              <div className="no-print" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-                <button style={{ ...gStyle.btnSecondary, whiteSpace: "nowrap" }}
-                  onClick={copyHeadline}>
-                  {copied ? "Copied!" : "Copy"}
-                </button>
-                <button style={{ ...gStyle.btnSecondary, whiteSpace: "nowrap" }}
-                  onClick={downloadHeadlineImage}>
-                  ⬇ Download image
-                </button>
-              </div>
+              <button className="no-print" style={{ ...gStyle.btnSecondary, whiteSpace: "nowrap", flexShrink: 0 }}
+                onClick={copyHeadline}>
+                {copied ? "Copied!" : "Copy"}
+              </button>
             </div>
           )}
         </div>
@@ -4581,7 +4600,7 @@ function SleepAnalysis({ client, isCoach }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: `2px solid ${C.border}` }}>
-                {["Date", "Wake Time", "Bedtime", "Naps", "Nap Sleep", "Night Sleep", "Total 24h", "Avg Wake Window", "Night Wakings"].map(h => (
+                {["Date", "Wake Time", "Bedtime", "Naps", "Nap Sleep", "Night Sleep", "Total 24h", "Avg Wake Window", "Night Wakings", "Day Notes"].map(h => (
                   <th key={h} style={{ padding: "8px 10px", textAlign: "left", color: C.muted, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</th>
                 ))}
               </tr>
@@ -4602,6 +4621,7 @@ function SleepAnalysis({ client, isCoach }) {
                   <td style={{ padding: "8px 10px", color: C.gold, fontWeight: 600 }}>{fmtDuration(d.totalMins)}</td>
                   <td style={{ padding: "8px 10px", color: C.mid }}>{d.avgWW ? fmtDuration(d.avgWW) : "—"}</td>
                   <td style={{ padding: "8px 10px", color: C.terracottaDark }}>{d.nightWakings !== null ? d.nightWakings : "—"}</td>
+                  <td style={{ padding: "8px 10px", color: C.danger, fontSize: 12 }}>{tagLabels(d.tags) || "—"}</td>
                 </tr>
               ))}
             </tbody>
