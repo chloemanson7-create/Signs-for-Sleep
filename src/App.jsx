@@ -1,4 +1,3 @@
-
 // Signs for Sleep - Practice Management App
 // Stack: React (single component) + Supabase
 // Replace SUPABASE_URL and SUPABASE_ANON_KEY with your actual values
@@ -5578,6 +5577,17 @@ function groupByCategory(resources) {
   return groups;
 }
 
+// "11 videos, 1 PDF" — the count line shown next to a collapsed category
+// heading so a client can tell what's inside before opening it.
+function summarizeResourceCounts(items) {
+  const videoCount = items.filter((r) => r.type === "video").length;
+  const pdfCount = items.filter((r) => r.type === "pdf").length;
+  const parts = [];
+  if (videoCount > 0) parts.push(`${videoCount} video${videoCount === 1 ? "" : "s"}`);
+  if (pdfCount > 0) parts.push(`${pdfCount} PDF${pdfCount === 1 ? "" : "s"}`);
+  return parts.length > 0 ? parts.join(", ") : `${items.length} item${items.length === 1 ? "" : "s"}`;
+}
+
 // Converts a raw Supabase storage URL into a branded path on your own domain
 // (yoursite.com/files/...) via the rewrite rule in vercel.json — the file
 // still physically lives in Supabase, this just hides the address in the
@@ -6134,6 +6144,10 @@ function ClientResourcesViewer({ clientId }) {
   const [grantedIds, setGrantedIds] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [viewingPdf, setViewingPdf] = useState(null);
+  // Categories currently expanded — starts empty so every heading loads
+  // collapsed, letting a client scan the list of headings + counts and jump
+  // straight to the one they want instead of scrolling past every video.
+  const [expandedCats, setExpandedCats] = useState(new Set());
 
   useEffect(() => {
     const load = async () => {
@@ -6169,22 +6183,50 @@ function ClientResourcesViewer({ clientId }) {
   const grouped = groupByCategory(accessible);
   const categories = Object.keys(grouped).sort();
 
+  const toggleCategory = (cat) => {
+    setExpandedCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat); else next.add(cat);
+      return next;
+    });
+  };
+
   return (
     <div>
-      {categories.map((cat) => (
-        <div key={cat} style={{ marginBottom: 28 }}>
-          <h3 style={{ fontFamily: font.display, color: C.terracotta, fontSize: 18, margin: "0 0 14px" }}>{cat}</h3>
-          <div className="resource-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-            {grouped[cat].map((r) => (
-              <div key={r.id} style={gStyle.card}>
-                <ResourceMedia resource={r} onOpenPdf={setViewingPdf} />
-                <div style={{ fontWeight: 700, fontSize: 14, color: C.dark, margin: "10px 0 2px" }}>{r.title}</div>
-                {r.description && <div style={{ fontSize: 12, color: C.mid }}>{r.description}</div>}
+      {categories.map((cat) => {
+        const items = grouped[cat];
+        const isOpen = expandedCats.has(cat);
+        return (
+          <div key={cat} style={{ marginBottom: 16 }}>
+            <button
+              type="button"
+              onClick={() => toggleCategory(cat)}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                gap: 12, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12,
+                padding: "14px 18px", cursor: "pointer", textAlign: "left", fontFamily: font.body,
+              }}
+            >
+              <span style={{ fontFamily: font.display, color: C.terracotta, fontSize: 18 }}>{cat}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>{summarizeResourceCounts(items)}</span>
+                <span style={{ color: C.gold, fontSize: 12 }}>{isOpen ? "▲" : "▼"}</span>
+              </span>
+            </button>
+            {isOpen && (
+              <div className="resource-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 14 }}>
+                {items.map((r) => (
+                  <div key={r.id} style={gStyle.card}>
+                    <ResourceMedia resource={r} onOpenPdf={setViewingPdf} />
+                    <div style={{ fontWeight: 700, fontSize: 14, color: C.dark, margin: "10px 0 2px" }}>{r.title}</div>
+                    {r.description && <div style={{ fontSize: 12, color: C.mid }}>{r.description}</div>}
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
       <style>{`
         @media screen and (max-width: 640px) {
           .resource-grid { grid-template-columns: 1fr !important; }
