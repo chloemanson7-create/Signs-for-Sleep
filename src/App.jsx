@@ -3938,6 +3938,26 @@ function SleepAnalysis({ client, isCoach }) {
   // The comparison table most recently shared with this client (client view only) —
   // fetched from Supabase, not the coach's live-edited period pickers.
   const [sharedComparison, setSharedComparison] = useState(null);
+  // Client-facing "Your Progress" card — starts open, collapsible down to just the title.
+  const [progressOpen, setProgressOpen] = useState(true);
+  // The headline is auto-generated from whichever periods are selected, but
+  // Chloé can edit it before sharing — this holds her edits, re-seeded from
+  // the auto text whenever the underlying periods (and therefore the
+  // suggested sentence) change, per the render-phase check near `headline` below.
+  const [editedHeadline, setEditedHeadline] = useState("");
+  // Tracks the last auto-generated headline seen, so the render-phase check
+  // below (not a useEffect — this runs before the loading/no-data early
+  // returns, and hooks can't come after those) can tell when the periods
+  // changed and it's time to re-seed `editedHeadline` with a fresh suggestion.
+  const [prevAutoHeadline, setPrevAutoHeadline] = useState(null);
+  // The child's name (from intake), not the parent/login name in `client.name`
+  // — used in the auto-generated headline so it reads "With Emma, ..." rather
+  // than the parent's name.
+  const [childName, setChildName] = useState(null);
+  useEffect(() => {
+    supabase.from("intake_responses").select("child_name").eq("client_id", client.id).maybeSingle()
+      .then(({ data }) => setChildName(data?.child_name || null));
+  }, [client.id]);
 
   useEffect(() => {
     supabase.from("sleep_diary").select("*")
@@ -4145,11 +4165,26 @@ function SleepAnalysis({ client, isCoach }) {
   if (summaryA.avgTotal !== null && summaryB.avgTotal !== null) {
     headlineParts.push(`total sleep moved from ${fmtDuration(summaryA.avgTotal)} to ${fmtDuration(summaryB.avgTotal)} a day`);
   }
-  const headline = headlineParts.length > 0 ? `With ${client.name}, ${headlineParts.join(", and ")}.` : "";
+  // Child's name (from intake), not client.name — client.name is the parent/
+  // login name, and "With Emma, ..." reads better than "With Sarah, ...".
+  // Falls back to client.name if intake hasn't been completed yet.
+  const headlineName = childName || client.name;
+  const headline = headlineParts.length > 0 ? `With ${headlineName}, ${headlineParts.join(", and ")}.` : "";
+
+  // The suggested sentence re-populates whenever the underlying periods
+  // change (i.e. whenever the auto-generated `headline` changes) — Chloé can
+  // then edit freely on top of that suggestion before copying or sharing.
+  // This is a render-phase state adjustment rather than a useEffect, since a
+  // hook can't be called after the loading/no-data early returns above.
+  if (headline !== prevAutoHeadline) {
+    setPrevAutoHeadline(headline);
+    setEditedHeadline(headline);
+  }
+
   const copyHeadline = () => {
-    if (!headline) return;
+    if (!editedHeadline) return;
     try {
-      navigator.clipboard.writeText(headline);
+      navigator.clipboard.writeText(editedHeadline);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {}
@@ -4165,7 +4200,7 @@ function SleepAnalysis({ client, isCoach }) {
       period_a_start: pAStart, period_a_end: pAEnd,
       period_b_start: pBStart, period_b_end: pBEnd,
       summary_a: summaryA, summary_b: summaryB,
-      headline: headline || null,
+      headline: editedHeadline || null,
       shared_at: new Date().toISOString(),
     }, { onConflict: "client_id" });
     setShared(true);
@@ -4407,49 +4442,61 @@ function SleepAnalysis({ client, isCoach }) {
           above, using the same table layout as her Compare Periods tool. */}
       {!isCoach && sharedComparison && (
         <div style={{ ...gStyle.card, marginBottom: 24, background: C.cream }}>
-          <h3 style={{ fontFamily: font.display, color: C.dark, margin: "0 0 4px", fontSize: 16 }}>
-            Your Progress
-          </h3>
-          <p style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>
-            Shared by Chloé on {new Date(sharedComparison.shared_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
-          </p>
-          <div style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 14px", background: C.cream, fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              <div>Metric</div>
-              <div style={{ textAlign: "right" }}>Before</div>
-              <div style={{ textAlign: "right" }}>After</div>
-              <div style={{ textAlign: "right" }}>Change</div>
-            </div>
-            {compareMetrics.map((m, i) => {
-              const aVal = sharedComparison.summary_a?.[m.key] ?? null;
-              const bVal = sharedComparison.summary_b?.[m.key] ?? null;
-              const d = (aVal !== null && bVal !== null) ? bVal - aVal : null;
-              const improved = d !== null && d !== 0 && m.direction !== "neutral" && (m.direction === "lower" ? d < 0 : d > 0);
-              const worsened = d !== null && d !== 0 && m.direction !== "neutral" && (m.direction === "lower" ? d > 0 : d < 0);
-              const deltaColor = improved ? C.success : worsened ? C.blue : C.mid;
-              const pct = (aVal && bVal !== null && aVal !== 0) ? Math.round(((bVal - aVal) / aVal) * 100) : null;
-              return (
-                <div key={m.key} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 14px", borderTop: `1px solid ${C.border}`, fontSize: 13, background: i % 2 === 0 ? C.white : C.cream, alignItems: "center" }}>
-                  <div style={{ color: C.dark, fontWeight: 600 }}>{m.label}</div>
-                  <div style={{ textAlign: "right", color: C.blueDark }}>{fmtCompareVal(aVal, m.unit)}</div>
-                  <div style={{ textAlign: "right", color: C.terracottaDark, fontWeight: 700 }}>{fmtCompareVal(bVal, m.unit)}</div>
-                  <div style={{ textAlign: "right", color: deltaColor, fontWeight: 700 }}>
-                    {fmtCompareDelta(d, m.unit)}{pct !== null && d !== 0 ? ` (${pct > 0 ? "+" : ""}${pct}%)` : ""}
+          {/* Collapsible — starts open, collapses down to just the title so a
+              client can tuck it away without losing it. */}
+          <button type="button" onClick={() => setProgressOpen(o => !o)} style={{
+            width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+            background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: font.body,
+          }}>
+            <h3 style={{ fontFamily: font.display, color: C.dark, margin: 0, fontSize: 16 }}>
+              Your Progress
+            </h3>
+            <span style={{ color: C.gold, fontSize: 12 }}>{progressOpen ? "▲" : "▼"}</span>
+          </button>
+          {progressOpen && (
+            <>
+              <p style={{ fontSize: 12, color: C.muted, margin: "4px 0 16px" }}>
+                Shared by Chloé on {new Date(sharedComparison.shared_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}
+              </p>
+              <div style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 14px", background: C.cream, fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  <div>Metric</div>
+                  <div style={{ textAlign: "right" }}>Before</div>
+                  <div style={{ textAlign: "right" }}>After</div>
+                  <div style={{ textAlign: "right" }}>Change</div>
+                </div>
+                {compareMetrics.map((m, i) => {
+                  const aVal = sharedComparison.summary_a?.[m.key] ?? null;
+                  const bVal = sharedComparison.summary_b?.[m.key] ?? null;
+                  const d = (aVal !== null && bVal !== null) ? bVal - aVal : null;
+                  const improved = d !== null && d !== 0 && m.direction !== "neutral" && (m.direction === "lower" ? d < 0 : d > 0);
+                  const worsened = d !== null && d !== 0 && m.direction !== "neutral" && (m.direction === "lower" ? d > 0 : d < 0);
+                  const deltaColor = improved ? C.success : worsened ? C.blue : C.mid;
+                  const pct = (aVal && bVal !== null && aVal !== 0) ? Math.round(((bVal - aVal) / aVal) * 100) : null;
+                  return (
+                    <div key={m.key} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", padding: "10px 14px", borderTop: `1px solid ${C.border}`, fontSize: 13, background: i % 2 === 0 ? C.white : C.cream, alignItems: "center" }}>
+                      <div style={{ color: C.dark, fontWeight: 600 }}>{m.label}</div>
+                      <div style={{ textAlign: "right", color: C.blueDark }}>{fmtCompareVal(aVal, m.unit)}</div>
+                      <div style={{ textAlign: "right", color: C.terracottaDark, fontWeight: 700 }}>{fmtCompareVal(bVal, m.unit)}</div>
+                      <div style={{ textAlign: "right", color: deltaColor, fontWeight: 700 }}>
+                        {fmtCompareDelta(d, m.unit)}{pct !== null && d !== 0 ? ` (${pct > 0 ? "+" : ""}${pct}%)` : ""}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p style={{ fontSize: 11, color: C.muted, marginTop: 10 }}>
+                Before: {fmtDateLabel(sharedComparison.period_a_start)} – {fmtDateLabel(sharedComparison.period_a_end)} &nbsp;|&nbsp;
+                After: {fmtDateLabel(sharedComparison.period_b_start)} – {fmtDateLabel(sharedComparison.period_b_end)}
+              </p>
+              {sharedComparison.headline && (
+                <div style={{ marginTop: 16, background: C.terracottaLight, borderRadius: 10, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 14, color: C.terracottaDark, fontStyle: "italic", lineHeight: 1.5 }}>
+                    "{sharedComparison.headline}"
                   </div>
                 </div>
-              );
-            })}
-          </div>
-          <p style={{ fontSize: 11, color: C.muted, marginTop: 10 }}>
-            Before: {fmtDateLabel(sharedComparison.period_a_start)} – {fmtDateLabel(sharedComparison.period_a_end)} &nbsp;|&nbsp;
-            After: {fmtDateLabel(sharedComparison.period_b_start)} – {fmtDateLabel(sharedComparison.period_b_end)}
-          </p>
-          {sharedComparison.headline && (
-            <div style={{ marginTop: 16, background: C.terracottaLight, borderRadius: 10, padding: "14px 16px" }}>
-              <div style={{ fontSize: 14, color: C.terracottaDark, fontStyle: "italic", lineHeight: 1.5 }}>
-                "{sharedComparison.headline}"
-              </div>
-            </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -4535,17 +4582,33 @@ function SleepAnalysis({ client, isCoach }) {
             </p>
           )}
 
-          {headline && (
-            <div style={{ marginTop: 16, background: C.terracottaLight, borderRadius: 10, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <div style={{ fontSize: 14, color: C.terracottaDark, fontStyle: "italic", lineHeight: 1.5 }}>
-                "{headline}"
-              </div>
-              <button className="no-print" style={{ ...gStyle.btnSecondary, whiteSpace: "nowrap", flexShrink: 0 }}
+          {/* Pre-populated from the periods above, but fully editable before
+              copying or sharing — re-seeds itself whenever the periods
+              change (see the render-phase check near `headline` above). */}
+          <div style={{ marginTop: 16, background: C.terracottaLight, borderRadius: 10, padding: "14px 16px" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <span style={{ fontSize: 22, color: C.terracottaDark, lineHeight: 1, fontFamily: font.display }}>"</span>
+              <textarea
+                className="no-print"
+                value={editedHeadline}
+                onChange={(e) => setEditedHeadline(e.target.value)}
+                placeholder="No headline suggested yet for these periods — write your own, or adjust the dates above."
+                style={{
+                  flex: 1, fontSize: 14, color: C.terracottaDark, fontStyle: "italic", lineHeight: 1.5,
+                  border: "none", background: "transparent", resize: "vertical", minHeight: 48,
+                  fontFamily: font.body, outline: "none", padding: 0,
+                }}
+              />
+              <span className="print-only" style={{ display: "none", fontSize: 14, color: C.terracottaDark, fontStyle: "italic" }}>{editedHeadline}</span>
+              <span style={{ fontSize: 22, color: C.terracottaDark, lineHeight: 1, fontFamily: font.display }}>"</span>
+            </div>
+            <div className="no-print" style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+              <button style={{ ...gStyle.btnSecondary, whiteSpace: "nowrap" }}
                 onClick={copyHeadline}>
                 {copied ? "Copied!" : "Copy"}
               </button>
             </div>
-          )}
+          </div>
         </div>
       )}
 
