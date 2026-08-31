@@ -1376,12 +1376,13 @@ function CoachApp({ session, onLogout }) {
   );
 }
 
-function Header({ subtitle, right }) {
+function Header({ subtitle, right, dark = false }) {
+  const T = dark ? DARK_C : C;
   return (
-    <div style={gStyle.header} data-print-hide="true" className="no-print">
+    <div style={{ ...gStyle.header, background: T.white, borderColor: T.border }} data-print-hide="true" className="no-print">
       <div>
-        <div style={gStyle.logo}>Signs for Sleep</div>
-        {subtitle && <span style={{ fontSize: 11, color: C.muted }}>{subtitle}</span>}
+        <div style={{ ...gStyle.logo, color: T.terracotta }}>Signs for Sleep</div>
+        {subtitle && <span style={{ fontSize: 11, color: T.muted }}>{subtitle}</span>}
       </div>
       {right}
     </div>
@@ -1598,6 +1599,11 @@ function ClientCard({ client, onClick, onRefresh }) {
 function ClientDetail({ client, onBack, onRefresh }) {
   const [tab, setTab] = useState("overview");
   const [clientData, setClientData] = useState(client);
+  // Night mode state lives here now (SleepDiaryViewer takes it as props) so
+  // it can be shared with a screen's header/chrome if that's ever wanted for
+  // the coach view too — for now this just keeps the diary's own toggle
+  // working the same as before.
+  const [isDark, themeMode, setThemeMode] = useDiaryNightMode();
 
   const refresh = async () => {
     const { data } = await supabase.from("clients").select("*").eq("id", client.id).maybeSingle();
@@ -1645,7 +1651,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
       {tab === "intake" && <IntakeViewer clientId={client.id} />}
       {tab === "diary" && (
         <>
-          <SleepDiaryViewer clientId={client.id} isCoach />
+          <SleepDiaryViewer clientId={client.id} isCoach isDark={isDark} themeMode={themeMode} setThemeMode={setThemeMode} />
           <NotesToRemember clientId={client.id} isCoach />
         </>
       )}
@@ -2175,6 +2181,14 @@ function ClientApp({ session, onLogout }) {
   const [hasIntake, setHasIntake] = useState(null);
   const [clientPackage, setClientPackage] = useState(null);
   const [diaryCount, setDiaryCount] = useState(0);
+  // Night mode lives here (not inside SleepDiaryViewer) so the header and tab
+  // bar can go dark along with the diary content — the whole screen, not
+  // just the diary card. It only actually applies while the Sleep Diary tab
+  // is the one showing; navigating elsewhere reverts the chrome to normal
+  // since those tabs were never designed with a dark theme.
+  const [isDark, themeMode, setThemeMode] = useDiaryNightMode();
+  const chromeDark = isDark && tab === "diary";
+  const T = chromeDark ? DARK_C : C;
 
   useEffect(() => {
     // Load intake completion
@@ -2217,10 +2231,11 @@ function ClientApp({ session, onLogout }) {
     (hasFoundations || hasExtension) && callsRemaining > 0;
 
   return (
-    <div style={gStyle.app}>
+    <div style={{ ...gStyle.app, background: T.cream, color: T.dark }}>
       <Header
         subtitle={`Welcome, ${session.clientName}`}
-        right={<button style={{ ...gStyle.btnSecondary, padding: "8px 14px" }} onClick={onLogout}>Log out</button>}
+        dark={chromeDark}
+        right={<button style={{ ...gStyle.btnSecondary, padding: "8px 14px", borderColor: T.terracotta, color: T.terracotta }} onClick={onLogout}>Log out</button>}
       />
 
       {!hasIntake && tab === "diary" && (
@@ -2240,83 +2255,107 @@ function ClientApp({ session, onLogout }) {
           tab's cell is the same width, so every row's start/second column
           lines up regardless of label length — and on a wide screen it still
           fits all the tabs on one row the same as before. */}
-      <div className="no-print" style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "0 16px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
-        <div style={{
-          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-          gap: 2, flex: "1 1 auto", minWidth: 0,
-        }}>
-          {tabs.map((t) => (
-            <button key={t.key} onClick={() => setTab(t.key)} style={{
-              padding: "12px 16px", border: "none", background: "transparent", cursor: "pointer",
-              fontFamily: font.body, fontSize: 14, fontWeight: 600, textAlign: "left",
-              color: tab === t.key ? C.terracotta : C.muted,
-              borderBottom: tab === t.key ? `2px solid ${C.terracotta}` : "2px solid transparent",
-              whiteSpace: "nowrap",
-            }}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <ContactCoachButton clientId={session.clientId} clientPackage={clientPackage?.package} defaultName={session.clientName} />
-          {/* Founding Family feedback button — only visible when is_app_tester is true on this client's record */}
-          {clientPackage?.is_app_tester && (
-            <a
-              href={FEEDBACK_FORM_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                padding: "8px 16px",
-                background: C.gold,
-                color: C.white,
-                borderRadius: 8,
-                fontSize: 13,
-                fontWeight: 600,
-                fontFamily: font.body,
-                textDecoration: "none",
+      <div className="no-print" style={{ background: T.white, borderBottom: `1px solid ${T.border}`, padding: "0 16px" }}>
+        {/* Wrapped at the same maxWidth/centering as the content area below,
+            so the action-button row's column gap can line up exactly with
+            the stat-card gap underneath at any screen width, not just on the
+            narrow phone widths where they'd happen to coincide anyway. */}
+        <div style={{ maxWidth: 700, margin: "0 auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+            gap: 2, flex: "1 1 auto", minWidth: 0,
+          }}>
+            {tabs.map((t) => (
+              <button key={t.key} onClick={() => setTab(t.key)} style={{
+                padding: "12px 16px", border: "none", background: "transparent", cursor: "pointer",
+                fontFamily: font.body, fontSize: 14, fontWeight: 600, textAlign: "left",
+                color: tab === t.key ? T.terracotta : T.muted,
+                borderBottom: tab === t.key ? `2px solid ${T.terracotta}` : "2px solid transparent",
                 whiteSpace: "nowrap",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}
-            >
-              🧪 Give Feedback
-            </a>
-          )}
-          {/* Book a Call button — only for eligible clients */}
-          {checkinUnlocked && (
-            <a
-              href={CHECKIN_BOOKING_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                padding: "8px 16px",
-                background: C.terracotta,
-                color: C.white,
-                borderRadius: 8,
-                fontSize: 13,
-                fontWeight: 600,
-                fontFamily: font.body,
-                textDecoration: "none",
-                whiteSpace: "nowrap",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}
-            >
-              📞 Book a Call
-              <span style={{ background: "rgba(255,255,255,0.25)", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>
-                {callsRemaining} left
-              </span>
-            </a>
-          )}
+              }}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {/* Action buttons — an equal-width grid (same gap as the stat cards
+              in the diary below) rather than a shrink-wrapped flex row, so
+              the gap between them lines up with the gap between "Total Nap
+              Sleep"/"Tonight's Sleep" etc. below, whether there are 1, 2 or
+              3 buttons showing. */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${1 + (clientPackage?.is_app_tester ? 1 : 0) + (checkinUnlocked ? 1 : 0)}, 1fr)`,
+            gap: 10, flex: "1 1 100%", maxWidth: 460, marginLeft: "auto",
+          }}>
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <ContactCoachButton clientId={session.clientId} clientPackage={clientPackage?.package} defaultName={session.clientName} />
+            </div>
+            {/* Founding Family feedback button — only visible when is_app_tester is true on this client's record */}
+            {clientPackage?.is_app_tester && (
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <a
+                  href={FEEDBACK_FORM_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    padding: "8px 16px",
+                    background: C.gold,
+                    color: C.white,
+                    borderRadius: 8,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    fontFamily: font.body,
+                    textDecoration: "none",
+                    whiteSpace: "nowrap",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                  }}
+                >
+                  🧪 Give Feedback
+                </a>
+              </div>
+            )}
+            {/* Book a Call button — only for eligible clients */}
+            {checkinUnlocked && (
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <a
+                  href={CHECKIN_BOOKING_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    padding: "8px 16px",
+                    background: C.terracotta,
+                    color: C.white,
+                    borderRadius: 8,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    fontFamily: font.body,
+                    textDecoration: "none",
+                    whiteSpace: "nowrap",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                  }}
+                >
+                  📞 Book a Call
+                  <span style={{ background: "rgba(255,255,255,0.25)", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>
+                    {callsRemaining} left
+                  </span>
+                </a>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
         {tab === "diary" && (
           <>
-            <SleepDiaryViewer clientId={session.clientId} isCoach={false} consultBooked={clientPackage?.consult_booked} />
+            <SleepDiaryViewer clientId={session.clientId} isCoach={false} consultBooked={clientPackage?.consult_booked}
+              isDark={isDark} themeMode={themeMode} setThemeMode={setThemeMode} />
             <NotesToRemember clientId={session.clientId} isCoach={false} />
           </>
         )}
@@ -2953,8 +2992,11 @@ function useDiaryNightMode() {
   return [isDark, mode, setMode];
 }
 
-function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
-  const [isDark, themeMode, setThemeMode] = useDiaryNightMode();
+// isDark/themeMode/setThemeMode are lifted up to and owned by the parent
+// screen (ClientApp / ClientDetail), not this component — the parent also
+// needs isDark to theme its header and tab bar so the whole screen goes
+// dark together, not just this card.
+function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode, setThemeMode }) {
   const T = isDark ? DARK_C : C;
   const [selectedDate, setSelectedDate] = useState(today());
   const [entry, setEntry] = useState(null);
@@ -3309,7 +3351,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   const daysRemaining = Math.max(0, DIARY_DAYS_REQUIRED - diaryCount);
 
   return (
-    <div style={isDark ? { background: T.cream, padding: 20, borderRadius: 16, boxSizing: "border-box" } : undefined}>
+    <div>
       {/* Night mode toggle — auto-detects sunset, but can be forced either way.
           This is the only tab with a night theme, since it's the one actually
           used at 2am; everywhere else stays as normal. */}
