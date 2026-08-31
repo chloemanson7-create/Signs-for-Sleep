@@ -269,6 +269,47 @@ const gStyle = {
   }),
 };
 
+// Dark ("night mode") counterpart to C — same key names, so any component
+// that swaps `const T = isDark ? DARK_C : C` picks up a full theme without
+// touching individual style rules. Used by the Sleep Diary's night mode.
+const DARK_C = {
+  terracotta: "#D98457",
+  terracottaLight: "rgba(196,113,74,0.22)",
+  terracottaDark: "#F0C4AC",
+  blue: "#8FB2CC",
+  blueLight: "rgba(107,143,168,0.22)",
+  blueDark: "#C7DCE9",
+  gold: "#D9BB66",
+  goldLight: "rgba(201,168,76,0.22)",
+  cream: "#1A1613",
+  dark: "#F3EDE6",
+  mid: "#C9BEB6",
+  muted: "#948880",
+  white: "#241F1B",
+  success: "#8FC49E",
+  successLight: "rgba(90,138,106,0.22)",
+  danger: "#E0938E",
+  dangerLight: "rgba(184,84,80,0.22)",
+  warning: "#D9BB66",
+  warningLight: "rgba(201,168,76,0.22)",
+  border: "rgba(201,168,76,0.22)",
+};
+
+// Same idea for the wheel-picker popovers (TimeSelect/DurationSelect) and
+// SuggestField, which build their styles from hardcoded hex rather than C.
+const LIGHT_PICKER = {
+  border: "rgba(196,113,74,0.18)", borderStrong: "rgba(196,113,74,0.25)", borderInput: "rgba(196,113,74,0.35)",
+  bgDisabled: "#FAF7F2", bg: "#FFFFFF", text: "#2C2420", textMuted: "#9E8E88",
+  gold: "#C9A84C", shadow: "rgba(44,36,32,0.18)", shadowSoft: "rgba(44,36,32,0.14)",
+  accent: "#C4714A", accentText: "#8A4B2A", danger: "#B4453A", success: "#4A7C59",
+};
+const DARK_PICKER = {
+  border: "rgba(201,168,76,0.25)", borderStrong: "rgba(201,168,76,0.35)", borderInput: "rgba(201,168,76,0.4)",
+  bgDisabled: "#1F1B17", bg: "#241F1B", text: "#F3EDE6", textMuted: "#9E948C",
+  gold: "#D9BB66", shadow: "rgba(0,0,0,0.45)", shadowSoft: "rgba(0,0,0,0.35)",
+  accent: "#D98457", accentText: "#F0C4AC", danger: "#E0938E", success: "#8FC49E",
+};
+
 // ── HELPERS ────────────────────────────────────────────────────────────────
 const toMin = (h, m) => parseInt(h || 0) * 60 + parseInt(m || 0);
 const fromMin = (mins) => {
@@ -293,6 +334,27 @@ const fmtDuration = (mins) => {
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
 };
+
+// Word-wraps text onto a Canvas 2D context, one fillText call per line.
+// Used by the Compare Periods "download image" export — kept dependency-free
+// (no html2canvas etc.) since this file has no build step to add packages to.
+function canvasWrapText(ctx, text, x, y, maxWidth, lineHeight) {
+  const words = text.split(" ");
+  let line = "";
+  let curY = y;
+  for (let n = 0; n < words.length; n++) {
+    const testLine = line + words[n] + " ";
+    if (ctx.measureText(testLine).width > maxWidth && n > 0) {
+      ctx.fillText(line, x, curY);
+      line = words[n] + " ";
+      curY += lineHeight;
+    } else {
+      line = testLine;
+    }
+  }
+  ctx.fillText(line, x, curY);
+  return curY + lineHeight;
+}
 
 // Flips a 24-hour "HH:MM" between AM and PM (09:15 <-> 21:15).
 const flipAmPm = (t) => {
@@ -562,7 +624,8 @@ function WheelColumn({ items, selected, onSelect, circular = true }) {
   );
 }
 
-function TimeSelect({ value, onChange, disabled, placeholder }) {
+function TimeSelect({ value, onChange, disabled, placeholder, dark = false }) {
+  const p = dark ? DARK_PICKER : LIGHT_PICKER;
   // When opening with empty value, default to current device time instead of nulls
   const init = parse24ToWheel(value || getCurrentTime());
   const [h,    setH]    = useState(init.h);
@@ -677,12 +740,12 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
         onClick={() => !disabled && setOpen(o => !o)}
         style={{
           width: "100%", padding: "10px 14px",
-          border: "1px solid rgba(196,113,74,0.18)",
+          border: `1px solid ${p.border}`,
           borderRadius: 8,
           fontFamily: "'DM Sans', system-ui, sans-serif",
           fontSize: 14,
-          background: disabled ? "#FAF7F2" : "#FFFFFF",
-          color: value ? "#2C2420" : "#9E8E88",
+          background: disabled ? p.bgDisabled : p.bg,
+          color: value ? p.text : p.textMuted,
           outline: "none", cursor: disabled ? "default" : "pointer",
           textAlign: "left", display: "flex",
           alignItems: "center", justifyContent: "space-between",
@@ -690,17 +753,17 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
         }}
       >
         <span>{label}</span>
-        {!disabled && <span style={{ color: "#C9A84C", fontSize: 11 }}>{open ? "▲" : "▼"}</span>}
+        {!disabled && <span style={{ color: p.gold, fontSize: 11 }}>{open ? "▲" : "▼"}</span>}
       </button>
 
       {open && (
         <div style={{
           position: "absolute", top: "calc(100% + 6px)", zIndex: 9999,
           ...(alignRight ? { right: 0 } : { left: 0 }),
-          background: "#FFFFFF",
-          border: "1px solid rgba(196,113,74,0.25)",
+          background: p.bg,
+          border: `1px solid ${p.borderStrong}`,
           borderRadius: 14,
-          boxShadow: "0 12px 40px rgba(44,36,32,0.18)",
+          boxShadow: `0 12px 40px ${p.shadow}`,
           padding: "8px 8px 10px",
           width: "100%", minWidth: 220,
           maxWidth: "calc(100vw - 16px)", boxSizing: "border-box",
@@ -715,9 +778,9 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
                 onClick={() => setMode(key)}
                 style={{
                   flex: 1, padding: "6px 8px", borderRadius: 7,
-                  border: "1px solid #C4714A",
-                  background: mode === key ? "#C4714A" : "transparent",
-                  color: mode === key ? "#FFFFFF" : "#8A4B2A",
+                  border: `1px solid ${p.accent}`,
+                  background: mode === key ? p.accent : "transparent",
+                  color: mode === key ? "#FFFFFF" : p.accentText,
                   fontSize: 12, fontWeight: 600, cursor: "pointer",
                   fontFamily: "'DM Sans', system-ui, sans-serif",
                 }}
@@ -734,7 +797,7 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
                 selected={h !== null ? String(h) : null}
                 onSelect={(v) => handle("h", parseInt(v))}
               />
-              <div style={{ color: "#9E8E88", fontSize: 20, fontWeight: 700, paddingBottom: 2 }}>:</div>
+              <div style={{ color: p.textMuted, fontSize: 20, fontWeight: 700, paddingBottom: 2 }}>:</div>
               <WheelColumn
                 items={WHEEL_MINS}
                 selected={m !== null ? String(m).padStart(2,"0") : null}
@@ -751,7 +814,7 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
             <div style={{ padding: "4px 4px 2px" }}>
               <label style={{
                 display: "block", fontSize: 11, fontWeight: 600, letterSpacing: 0.3,
-                color: "#9E8E88", marginBottom: 5, textTransform: "uppercase",
+                color: p.textMuted, marginBottom: 5, textTransform: "uppercase",
                 fontFamily: "'DM Sans', system-ui, sans-serif",
               }}>
                 24-hour time
@@ -766,21 +829,21 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
                 placeholder="e.g. 07:00, 13:30, 19:45"
                 style={{
                   width: "100%", padding: "10px 12px", boxSizing: "border-box",
-                  border: `1px solid ${manualInvalid ? "#B4453A" : "rgba(196,113,74,0.35)"}`,
+                  border: `1px solid ${manualInvalid ? p.danger : p.borderInput}`,
                   borderRadius: 8, fontSize: 16, letterSpacing: 1,
                   fontFamily: "'DM Sans', system-ui, sans-serif",
-                  color: "#2C2420", outline: "none",
+                  color: p.text, outline: "none",
                 }}
               />
               {/* Read-back line: the AM/PM safeguard. Typing 24-hour removes the
                   ambiguity at entry, and this confirms how it was understood. */}
               <div style={{ marginTop: 7, fontSize: 12, minHeight: 17, fontFamily: "'DM Sans', system-ui, sans-serif" }}>
                 {manualParsed ? (
-                  <span style={{ color: "#4A7C59", fontWeight: 600 }}>✓ {to12hLabel(manualParsed)}</span>
+                  <span style={{ color: p.success, fontWeight: 600 }}>✓ {to12hLabel(manualParsed)}</span>
                 ) : manualInvalid ? (
-                  <span style={{ color: "#B4453A" }}>Enter a time between 00:00 and 23:59</span>
+                  <span style={{ color: p.danger }}>Enter a time between 00:00 and 23:59</span>
                 ) : (
-                  <span style={{ color: "#9E8E88" }}>Midnight is 00:00 · midday is 12:00</span>
+                  <span style={{ color: p.textMuted }}>Midnight is 00:00 · midday is 12:00</span>
                 )}
               </div>
             </div>
@@ -790,7 +853,7 @@ function TimeSelect({ value, onChange, disabled, placeholder }) {
             style={{
               marginTop: 8, width: "100%", padding: "9px",
               border: "none", borderRadius: 8,
-              background: "#C4714A", color: "#FFFFFF",
+              background: p.accent, color: "#FFFFFF",
               fontSize: 13, fontFamily: "'DM Sans', system-ui, sans-serif",
               fontWeight: 600, cursor: "pointer",
             }}
@@ -820,7 +883,8 @@ function wheelToMins(h, m) {
   return parseInt(h) * 60 + parseInt(m);
 }
 
-function DurationSelect({ value, onChange, disabled, placeholder }) {
+function DurationSelect({ value, onChange, disabled, placeholder, dark = false }) {
+  const p = dark ? DARK_PICKER : LIGHT_PICKER;
   const init = parseMinsToWheel(value);
   const [h,    setH]    = useState(init.h);
   const [m,    setM]    = useState(init.m);
@@ -869,12 +933,12 @@ function DurationSelect({ value, onChange, disabled, placeholder }) {
         onClick={() => !disabled && setOpen(o => !o)}
         style={{
           width: "100%", padding: "10px 14px",
-          border: "1px solid rgba(196,113,74,0.18)",
+          border: `1px solid ${p.border}`,
           borderRadius: 8,
           fontFamily: "'DM Sans', system-ui, sans-serif",
           fontSize: 14,
-          background: disabled ? "#FAF7F2" : "#FFFFFF",
-          color: h !== null ? "#2C2420" : "#9E8E88",
+          background: disabled ? p.bgDisabled : p.bg,
+          color: h !== null ? p.text : p.textMuted,
           outline: "none", cursor: disabled ? "default" : "pointer",
           textAlign: "left", display: "flex",
           alignItems: "center", justifyContent: "space-between",
@@ -882,17 +946,17 @@ function DurationSelect({ value, onChange, disabled, placeholder }) {
         }}
       >
         <span>{label}</span>
-        {!disabled && <span style={{ color: "#C9A84C", fontSize: 11 }}>{open ? "▲" : "▼"}</span>}
+        {!disabled && <span style={{ color: p.gold, fontSize: 11 }}>{open ? "▲" : "▼"}</span>}
       </button>
 
       {open && (
         <div style={{
           position: "absolute", top: "calc(100% + 6px)", zIndex: 9999,
           ...(alignRight ? { right: 0 } : { left: 0 }),
-          background: "#FFFFFF",
-          border: "1px solid rgba(196,113,74,0.25)",
+          background: p.bg,
+          border: `1px solid ${p.borderStrong}`,
           borderRadius: 14,
-          boxShadow: "0 12px 40px rgba(44,36,32,0.18)",
+          boxShadow: `0 12px 40px ${p.shadow}`,
           padding: "8px 8px 10px",
           width: "100%", minWidth: 220,
           maxWidth: "calc(100vw - 16px)", boxSizing: "border-box",
@@ -903,20 +967,20 @@ function DurationSelect({ value, onChange, disabled, placeholder }) {
               selected={h !== null ? String(h) : null}
               onSelect={(v) => handle("h", parseInt(v))}
             />
-            <div style={{ color: "#9E8E88", fontSize: 13, fontWeight: 700, paddingBottom: 2 }}>hr</div>
+            <div style={{ color: p.textMuted, fontSize: 13, fontWeight: 700, paddingBottom: 2 }}>hr</div>
             <WheelColumn
               items={WHEEL_MINS}
               selected={m !== null ? String(m).padStart(2,"0") : null}
               onSelect={(v) => handle("m", parseInt(v))}
             />
-            <div style={{ color: "#9E8E88", fontSize: 13, fontWeight: 700, paddingBottom: 2 }}>min</div>
+            <div style={{ color: p.textMuted, fontSize: 13, fontWeight: 700, paddingBottom: 2 }}>min</div>
           </div>
           <button
             onClick={() => setOpen(false)}
             style={{
               marginTop: 8, width: "100%", padding: "9px",
               border: "none", borderRadius: 8,
-              background: "#C4714A", color: "#FFFFFF",
+              background: p.accent, color: "#FFFFFF",
               fontSize: 13, fontFamily: "'DM Sans', system-ui, sans-serif",
               fontWeight: 600, cursor: "pointer",
             }}
@@ -1600,7 +1664,12 @@ function ClientDetail({ client, onBack, onRefresh }) {
 
       {tab === "overview" && <ClientOverview client={clientData} onRefresh={refresh} />}
       {tab === "intake" && <IntakeViewer clientId={client.id} />}
-      {tab === "diary" && <SleepDiaryViewer clientId={client.id} isCoach />}
+      {tab === "diary" && (
+        <>
+          <SleepDiaryViewer clientId={client.id} isCoach />
+          <NotesToRemember clientId={client.id} isCoach />
+        </>
+      )}
       {tab === "analysis" && <SleepAnalysis client={clientData} isCoach />}
       {tab === "plan" && <SleepPlanEditor clientId={client.id} clientData={clientData} isCoach={true} />}
       {tab === "progress" && <ProgressTab clientId={client.id} clientData={clientData} isCoach={true} />}
@@ -2266,7 +2335,12 @@ function ClientApp({ session, onLogout }) {
       </div>
 
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "24px 16px" }}>
-        {tab === "diary" && <SleepDiaryViewer clientId={session.clientId} isCoach={false} consultBooked={clientPackage?.consult_booked} />}
+        {tab === "diary" && (
+          <>
+            <SleepDiaryViewer clientId={session.clientId} isCoach={false} consultBooked={clientPackage?.consult_booked} />
+            <NotesToRemember clientId={session.clientId} isCoach={false} />
+          </>
+        )}
         {tab === "package" && <YourPackageTab clientPackage={clientPackage} />}
         {tab === "analysis" && <SleepAnalysis client={{ id: session.clientId, name: session.clientName }} isCoach={false} />}
         {tab === "progress" && <ProgressTab clientId={session.clientId} isCoach={false} />}
@@ -2608,7 +2682,21 @@ const emptyEntry = () => ({
   night_wakings_mode: "simple", night_wakings: [],
   daytime_notes: "",
   naps: [emptyNap()],
+  tags: [],
 });
+
+// Context tags for a diary day — explains an otherwise-confusing rough night
+// (teething, a bug, being away from home) so it doesn't just look like an
+// unexplained regression, and doubles as a quick way to spot which days are
+// worth excluding from the Analysis tab's averages.
+const DIARY_TAGS = [
+  { key: "illness",      label: "Unwell",         emoji: "🤒" },
+  { key: "teething",     label: "Teething",       emoji: "🦷" },
+  { key: "travel",       label: "Travel/away",    emoji: "✈️" },
+  { key: "growth_spurt", label: "Growth spurt",   emoji: "📈" },
+  { key: "vaccination",  label: "Vaccination",    emoji: "💉" },
+  { key: "other",        label: "Other unusual day", emoji: "❓" },
+];
 
 // Turns a client's diary history into ranked "most used first" suggestion
 // lists per question, so a repeat answer (e.g. "fed to sleep", "cot") is one
@@ -2657,7 +2745,8 @@ const emptySuggestionPools = {
 // typed answers for this exact question. Opens on focus, narrows as they
 // type, one tap fills the field. onMouseDown (not onClick) on the option is
 // what lets a tap register before the field's onBlur closes the dropdown.
-function SuggestField({ value, onChange, suggestions = [], placeholder, disabled, minHeight = 56, multiline = true }) {
+function SuggestField({ value, onChange, suggestions = [], placeholder, disabled, minHeight = 56, multiline = true, dark = false }) {
+  const p = dark ? DARK_PICKER : LIGHT_PICKER;
   const [open, setOpen] = useState(false);
   const current = (value || "").trim().toLowerCase();
   const filtered = (suggestions || [])
@@ -2669,7 +2758,7 @@ function SuggestField({ value, onChange, suggestions = [], placeholder, disabled
   return (
     <div style={{ position: "relative" }}>
       <Field
-        style={{ ...gStyle.input, ...(multiline ? { minHeight, resize: "vertical" } : {}) }}
+        style={{ ...gStyle.input, background: p.bg, color: p.text, borderColor: p.border, ...(multiline ? { minHeight, resize: "vertical" } : {}) }}
         value={value || ""}
         placeholder={placeholder}
         disabled={disabled}
@@ -2680,8 +2769,8 @@ function SuggestField({ value, onChange, suggestions = [], placeholder, disabled
       {open && !disabled && filtered.length > 0 && (
         <div style={{
           position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 50,
-          background: "#FFFFFF", border: "1px solid rgba(196,113,74,0.25)",
-          borderRadius: 10, boxShadow: "0 8px 24px rgba(44,36,32,0.14)",
+          background: p.bg, border: `1px solid ${p.borderStrong}`,
+          borderRadius: 10, boxShadow: `0 8px 24px ${p.shadowSoft}`,
           padding: 6, maxHeight: 190, overflowY: "auto", boxSizing: "border-box",
         }}>
           {filtered.map((s, i) => (
@@ -2692,7 +2781,7 @@ function SuggestField({ value, onChange, suggestions = [], placeholder, disabled
               style={{
                 display: "block", width: "100%", textAlign: "left",
                 padding: "8px 10px", borderRadius: 7, border: "none",
-                background: "transparent", color: "#2C2420",
+                background: "transparent", color: p.text,
                 fontSize: 13, fontFamily: font.body, cursor: "pointer",
               }}
             >
@@ -2705,7 +2794,188 @@ function SuggestField({ value, onChange, suggestions = [], placeholder, disabled
   );
 }
 
+// Night mode for the Sleep Diary — the one screen actually used at 2am, so
+// it's the only part of the app that gets a dark theme (see DARK_C/DARK_PICKER
+// above). "auto" tries to detect whether it's currently after sunset via
+// geolocation + the free sunrise-sunset.org API, cached per-day in
+// localStorage so it's one lookup per day, not one per render; if geolocation
+// is denied/unavailable or the request fails it falls back to a plain
+// local-time heuristic (7pm–7am reads as night). A manual toggle can force
+// it either way regardless of the time of day, and "reset to auto" clears
+// the override.
+// "Notes to remember to ask Chloé" — a running list a parent can jot into
+// any time something occurs to them, so it isn't lost by the time their next
+// check-in or call comes around. Deliberately NOT the "Message/Email Chloé"
+// button (ContactCoachButton above) — this doesn't send anything, it's just
+// a shared shortlist both sides can see and tick off once it's been
+// discussed. Coach can add to it too (e.g. "ask about X at our next call").
+// Needs a `client_notes` table in Supabase — see the SQL Chloé was given.
+function NotesToRemember({ clientId, isCoach }) {
+  const [notes, setNotes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [draft, setDraft] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const load = async () => {
+    const { data, error } = await supabase.from("client_notes")
+      .select("*").eq("client_id", clientId)
+      .order("created_at", { ascending: false });
+    if (!error) setNotes(data || []);
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [clientId]);
+
+  const addNote = async () => {
+    const text = draft.trim();
+    if (!text) return;
+    setDraft("");
+    const { data } = await supabase.from("client_notes")
+      .insert({ client_id: clientId, text, author: isCoach ? "coach" : "client", resolved: false })
+      .select().maybeSingle();
+    if (data) setNotes(prev => [data, ...prev]);
+  };
+
+  const toggleResolved = async (note) => {
+    setNotes(prev => prev.map(n => n.id === note.id ? { ...n, resolved: !n.resolved } : n));
+    await supabase.from("client_notes").update({ resolved: !note.resolved }).eq("id", note.id);
+  };
+
+  const removeNote = async (id) => {
+    setNotes(prev => prev.filter(n => n.id !== id));
+    await supabase.from("client_notes").delete().eq("id", id);
+  };
+
+  if (loading) return null;
+  const openCount = notes.filter(n => !n.resolved).length;
+
+  return (
+    <div style={{ ...gStyle.card, marginTop: 20 }}>
+      <button onClick={() => setOpen(o => !o)} style={{
+        width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+        background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: font.body,
+      }}>
+        <span style={{ fontFamily: font.display, fontSize: 16, color: C.terracotta, display: "flex", alignItems: "center", gap: 8 }}>
+          📝 {isCoach ? "Notes to remember (from client)" : "Notes to remember to ask Chloé"}
+          {openCount > 0 && <span style={gStyle.tag(C.white, C.terracotta)}>{openCount}</span>}
+        </span>
+        <span style={{ color: C.gold, fontSize: 12 }}>{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 14 }}>
+          <p style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+            {isCoach
+              ? "Things this client has jotted down to remember to ask you — and a place to leave a note back for them."
+              : "Jot down anything you want to remember to mention or ask Chloé — she'll see this before your next check-in or call."}
+          </p>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <input
+              style={gStyle.input}
+              value={draft}
+              placeholder={isCoach ? "Add a note for the client to see…" : "e.g. ask about the 4pm nap…"}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") addNote(); }}
+            />
+            <button onClick={addNote} style={{ ...gStyle.btnPrimary, width: "auto", padding: "10px 18px", flexShrink: 0 }}>Add</button>
+          </div>
+          {notes.length === 0 ? (
+            <p style={{ fontSize: 13, color: C.muted }}>No notes yet.</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {notes.map((n) => (
+                <div key={n.id} style={{
+                  display: "flex", alignItems: "flex-start", gap: 10,
+                  padding: "10px 12px", borderRadius: 8,
+                  background: n.resolved ? C.cream : C.terracottaLight,
+                  opacity: n.resolved ? 0.6 : 1,
+                }}>
+                  <input type="checkbox" checked={!!n.resolved} onChange={() => toggleResolved(n)} style={{ marginTop: 3 }} />
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: 0, fontSize: 13, color: C.dark, textDecoration: n.resolved ? "line-through" : "none" }}>{n.text}</p>
+                    <p style={{ margin: "4px 0 0", fontSize: 10, color: C.muted }}>
+                      {n.author === "coach" ? "From Chloé" : "You"} · {new Date(n.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
+                    </p>
+                  </div>
+                  <button onClick={() => removeNote(n.id)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function useDiaryNightMode() {
+  const [mode, setMode] = useState(() => {
+    try { return localStorage.getItem("sfs_diary_theme") || "auto"; } catch (e) { return "auto"; }
+  });
+  const [autoIsNight, setAutoIsNight] = useState(() => {
+    const h = new Date().getHours();
+    return h >= 19 || h < 7;
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem("sfs_diary_theme", mode); } catch (e) { /* private browsing etc — just won't persist */ }
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== "auto") return;
+    let cancelled = false;
+    const applyHeuristic = () => {
+      const h = new Date().getHours();
+      if (!cancelled) setAutoIsNight(h >= 19 || h < 7);
+    };
+    const cacheKey = "sfs_sunset_cache";
+    const todayStr = new Date().toDateString();
+    const checkAgainstSunset = (sunsetIso, sunriseIso) => {
+      const now = new Date();
+      if (!cancelled) setAutoIsNight(now >= new Date(sunsetIso) || now < new Date(sunriseIso));
+    };
+    const readCache = () => {
+      try { return JSON.parse(localStorage.getItem(cacheKey) || "null"); } catch (e) { return null; }
+    };
+    const cached = readCache();
+    if (cached && cached.date === todayStr) {
+      checkAgainstSunset(cached.sunset, cached.sunrise);
+    } else if (!navigator.geolocation) {
+      applyHeuristic();
+    } else {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          fetch(`https://api.sunrise-sunset.org/json?lat=${latitude}&lng=${longitude}&formatted=0`)
+            .then((r) => r.json())
+            .then((data) => {
+              if (cancelled || data?.status !== "OK") { if (!cancelled) applyHeuristic(); return; }
+              try {
+                localStorage.setItem(cacheKey, JSON.stringify({ date: todayStr, sunset: data.results.sunset, sunrise: data.results.sunrise }));
+              } catch (e) { /* ignore */ }
+              checkAgainstSunset(data.results.sunset, data.results.sunrise);
+            })
+            .catch(() => { if (!cancelled) applyHeuristic(); });
+        },
+        () => { if (!cancelled) applyHeuristic(); }, // permission denied/unavailable — fall back quietly
+        { timeout: 8000 }
+      );
+    }
+    // Re-check every 15 min so sunset/sunrise crossing over doesn't need a page reload.
+    const id = setInterval(() => {
+      const c = readCache();
+      if (c && c.date === new Date().toDateString()) checkAgainstSunset(c.sunset, c.sunrise);
+      else applyHeuristic();
+    }, 15 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [mode]);
+
+  const isDark = mode === "dark" || (mode === "auto" && autoIsNight);
+  return [isDark, mode, setMode];
+}
+
 function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
+  const [isDark, themeMode, setThemeMode] = useDiaryNightMode();
+  const T = isDark ? DARK_C : C;
   const [selectedDate, setSelectedDate] = useState(today());
   const [entry, setEntry] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -2774,7 +3044,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           .eq("client_id", clientId).eq("date", offsetDate(selectedDate, +1)).maybeSingle(),
       ]);
       if (!cancelled) {
-        setEntry(data ? { ...data, naps: data.naps || [emptyNap()], night_wakings: data.night_wakings || [], night_wakings_mode: data.night_wakings_mode || "simple" } : emptyEntry());
+        setEntry(data ? { ...data, naps: data.naps || [emptyNap()], night_wakings: data.night_wakings || [], night_wakings_mode: data.night_wakings_mode || "simple", tags: data.tags || [] } : emptyEntry());
         setAdjTimes({
           prevBedTime: prevDay?.bed_time ? prevDay.bed_time.slice(0, 5) : null,
           nextWakeTime: nextDay?.wake_time ? nextDay.wake_time.slice(0, 5) : null,
@@ -2835,6 +3105,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
       night_wakings_mode: wakingMode,
       night_wakings: rest.night_wakings || [],
       daytime_notes: rest.daytime_notes || null,
+      tags: rest.tags || [],
       total_nap_mins: totalNapMins,
       night_sleep_mins: nightSleep,
       total_sleep_24h: total24h,
@@ -2904,6 +3175,14 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   // Each field update saves immediately
   const update = async (field, value) => {
     const updated = { ...entry, [field]: value };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
+  };
+
+  const toggleTag = async (key) => {
+    const current = entry.tags || [];
+    const tags = current.includes(key) ? current.filter(t => t !== key) : [...current, key];
+    const updated = { ...entry, tags };
     setEntry(updated);
     await doSave(updated, selectedDate);
   };
@@ -3034,7 +3313,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
 
   const handleDateChange = (newDate) => setSelectedDate(newDate);
 
-  if (loading || !entry) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
+  if (loading || !entry) return <p style={{ color: T.muted, padding: 40 }}>Loading…</p>;
 
   const totalNapMins = calcNapMins(entry);
   // Same AM/PM-slip detection as naps, applied to the night pairing: yesterday's
@@ -3049,7 +3328,32 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
   const daysRemaining = Math.max(0, DIARY_DAYS_REQUIRED - diaryCount);
 
   return (
-    <div>
+    <div style={isDark ? { background: T.cream, padding: 20, borderRadius: 16, boxSizing: "border-box" } : undefined}>
+      {/* Night mode toggle — auto-detects sunset, but can be forced either way.
+          This is the only tab with a night theme, since it's the one actually
+          used at 2am; everywhere else stays as normal. */}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        {themeMode !== "auto" && (
+          <button onClick={() => setThemeMode("auto")} style={{
+            background: "none", border: "none", color: T.muted, fontSize: 11,
+            textDecoration: "underline", cursor: "pointer", fontFamily: font.body, padding: 0,
+          }}>
+            Reset to auto
+          </button>
+        )}
+        <button
+          onClick={() => setThemeMode(isDark ? "light" : "dark")}
+          style={{
+            display: "flex", alignItems: "center", gap: 6,
+            background: "transparent", border: `1px solid ${T.border}`, borderRadius: 20,
+            padding: "6px 14px", fontSize: 12, fontWeight: 600, color: T.mid, cursor: "pointer",
+            fontFamily: font.body,
+          }}
+        >
+          {isDark ? "☀️ Day mode" : "🌙 Night mode"}
+        </button>
+      </div>
+
       {/* Booking banner — client only, and only until the coach has marked the consult as booked */}
       {!isCoach && !consultBooked && (
         bookingUnlocked ? (
@@ -3060,7 +3364,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
             flexWrap: "wrap", gap: 12,
           }}>
             <div>
-              <div style={{ fontFamily: font.display, fontSize: 18, color: C.white, marginBottom: 4 }}>
+              <div style={{ fontFamily: font.display, fontSize: 18, color: T.white, marginBottom: 4 }}>
                 🎉 You're ready to book your consult!
               </div>
               <div style={{ fontSize: 13, color: "rgba(255,255,255,0.85)", lineHeight: 1.5 }}>
@@ -3072,7 +3376,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
               target="_blank"
               rel="noopener noreferrer"
               style={{
-                background: C.white, color: C.terracotta, borderRadius: 10,
+                background: T.white, color: T.terracotta, borderRadius: 10,
                 padding: "12px 24px", fontFamily: font.body, fontSize: 14,
                 fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap",
                 letterSpacing: "0.02em",
@@ -3083,27 +3387,27 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           </div>
         ) : (
           <div style={{
-            background: C.blueLight, borderRadius: 14, padding: "16px 20px",
+            background: T.blueLight, borderRadius: 14, padding: "16px 20px",
             marginBottom: 24, display: "flex", alignItems: "center", gap: 16,
           }}>
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, color: C.blueDark, marginBottom: 4 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: T.blueDark, marginBottom: 4 }}>
                 Sleep diary progress
               </div>
-              <div style={{ fontSize: 13, color: C.blueDark, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 13, color: T.blueDark, lineHeight: 1.5 }}>
                 Complete {daysRemaining} more day{daysRemaining !== 1 ? "s" : ""} of sleep diary to unlock your consult booking.
               </div>
             </div>
             <div style={{ textAlign: "center", minWidth: 56 }}>
-              <div style={{ fontSize: 28, fontWeight: 700, color: C.blue }}>{diaryCount}</div>
-              <div style={{ fontSize: 11, color: C.blueDark, letterSpacing: "0.05em" }}>of {DIARY_DAYS_REQUIRED}</div>
+              <div style={{ fontSize: 28, fontWeight: 700, color: T.blue }}>{diaryCount}</div>
+              <div style={{ fontSize: 11, color: T.blueDark, letterSpacing: "0.05em" }}>of {DIARY_DAYS_REQUIRED}</div>
             </div>
             {/* Progress dots */}
             <div style={{ display: "flex", gap: 6 }}>
               {Array.from({ length: DIARY_DAYS_REQUIRED }).map((_, i) => (
                 <div key={i} style={{
                   width: 10, height: 10, borderRadius: "50%",
-                  background: i < diaryCount ? C.terracotta : "rgba(107,143,168,0.3)",
+                  background: i < diaryCount ? T.terracotta : "rgba(107,143,168,0.3)",
                 }} />
               ))}
             </div>
@@ -3114,12 +3418,36 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
       {/* Date nav */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
         <button onClick={() => changeDate(-1)} style={{ ...gStyle.btnSecondary, padding: "8px 14px" }}>←</button>
-        <input type="date" style={{ ...gStyle.input, flex: 1, textAlign: "center" }}
+        <input type="date" style={{ ...gStyle.input, flex: 1, textAlign: "center", background: T.white, borderColor: T.border, color: T.dark }}
           value={selectedDate} onChange={(e) => handleDateChange(e.target.value)}
           max={today()}
         />
         <button onClick={() => changeDate(1)} style={{ ...gStyle.btnSecondary, padding: "8px 14px" }}
           disabled={selectedDate >= today()}>→</button>
+      </div>
+
+      {/* Context tags — flags a rough day as explained by something other than
+          a genuine regression, and doubles as a quick way to spot which days
+          are worth excluding over in the Analysis tab. */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
+        {DIARY_TAGS.map((t) => {
+          const active = (entry.tags || []).includes(t.key);
+          return (
+            <button key={t.key} onClick={() => !isCoach && toggleTag(t.key)} disabled={isCoach}
+              style={{
+                display: "flex", alignItems: "center", gap: 5,
+                padding: "6px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600,
+                border: `1px solid ${active ? T.gold : T.border}`,
+                background: active ? T.goldLight : "transparent",
+                color: active ? T.terracottaDark : T.muted,
+                cursor: isCoach ? "default" : "pointer",
+                fontFamily: font.body,
+              }}
+            >
+              <span>{t.emoji}</span>{t.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* Calculations summary */}
@@ -3130,19 +3458,19 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           { label: "Total sleep (24h)", value: fmtDuration(total24h) },
           { label: "Naps today", value: entry.naps?.filter(n => n.start && n.end).length || 0 },
         ].map((s) => (
-          <div key={s.label} style={{ background: C.terracottaLight, borderRadius: 10, padding: "12px 14px" }}>
-            <div style={{ fontSize: 11, color: C.terracottaDark, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>{s.label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: C.terracottaDark, marginTop: 4 }}>{s.value}</div>
+          <div key={s.label} style={{ background: T.terracottaLight, borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ fontSize: 11, color: T.terracottaDark, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>{s.label}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: T.terracottaDark, marginTop: 4 }}>{s.value}</div>
           </div>
         ))}
       </div>
 
       {/* Wake time */}
-      <div style={gStyle.card}>
-        <h3 style={{ fontFamily: font.display, color: C.blue, margin: "0 0 4px" }}>Morning Wake</h3>
-        <p style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>Enter times in 24hr format — e.g. 07:00, 13:30, 19:45</p>
-        <label style={gStyle.label}>Wake time</label>
-        <TimeSelect value={entry.wake_time} onChange={(v) => update("wake_time", v)} disabled={isCoach} placeholder="Select wake time…" />
+      <div style={{ ...gStyle.card, background: T.white, borderColor: T.border }}>
+        <h3 style={{ fontFamily: font.display, color: T.blue, margin: "0 0 4px" }}>Morning Wake</h3>
+        <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>Enter times in 24hr format — e.g. 07:00, 13:30, 19:45</p>
+        <label style={{ ...gStyle.label, color: T.mid }}>Wake time</label>
+        <TimeSelect dark={isDark} value={entry.wake_time} onChange={(v) => update("wake_time", v)} disabled={isCoach} placeholder="Select wake time…" />
         {wakeFlag && (
           <div style={{
             background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
@@ -3174,9 +3502,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
       </div>
 
       {/* Naps */}
-      <div style={gStyle.card}>
+      <div style={{ ...gStyle.card, background: T.white, borderColor: T.border }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h3 style={{ fontFamily: font.display, color: C.blue, margin: 0 }}>Naps</h3>
+          <h3 style={{ fontFamily: font.display, color: T.blue, margin: 0 }}>Naps</h3>
           {!isCoach && (
             <div style={{ display: "flex", gap: 6 }}>
               <button
@@ -3212,38 +3540,38 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           const settleMins = rawSettleMins !== null && rawSettleMins >= 0 ? rawSettleMins : null;
 
           return (
-            <div key={idx} style={{ borderTop: idx > 0 ? `1px solid ${C.border}` : "none", paddingTop: idx > 0 ? 16 : 0, marginTop: idx > 0 ? 16 : 0 }}>
+            <div key={idx} style={{ borderTop: idx > 0 ? `1px solid ${T.border}` : "none", paddingTop: idx > 0 ? 16 : 0, marginTop: idx > 0 ? 16 : 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontWeight: 700, fontSize: 14, color: C.mid }}>Nap {idx + 1}</span>
+                <span style={{ fontWeight: 700, fontSize: 14, color: T.mid }}>Nap {idx + 1}</span>
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  {dur !== null && <span style={gStyle.tag(C.blue, C.blueLight)}>{fmtDuration(dur)}</span>}
+                  {dur !== null && <span style={gStyle.tag(T.blue, T.blueLight)}>{fmtDuration(dur)}</span>}
                   {!isCoach && entry.naps.length > 1 && (
-                    <button onClick={() => removeNap(idx)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16 }}>×</button>
+                    <button onClick={() => removeNap(idx)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 16 }}>×</button>
                   )}
                 </div>
               </div>
               {(ww !== null || wwFromPrev !== null) && (
-                <p style={{ fontSize: 12, color: C.gold, marginBottom: 8 }}>
+                <p style={{ fontSize: 12, color: T.gold, marginBottom: 8 }}>
                   ⏱ Wake window: {fmtDuration(ww ?? wwFromPrev)} {idx === 0 ? "since wake" : "since last nap"}
                 </p>
               )}
               <div style={{ marginBottom: 10 }}>
-                <label style={gStyle.label}>Nap routine started</label>
-                <TimeSelect value={nap.routine_start} onChange={(v) => updateNap(idx, "routine_start", v)} disabled={isCoach} placeholder="Select time…" />
+                <label style={{ ...gStyle.label, color: T.mid }}>Nap routine started</label>
+                <TimeSelect dark={isDark} value={nap.routine_start} onChange={(v) => updateNap(idx, "routine_start", v)} disabled={isCoach} placeholder="Select time…" />
               </div>
               {settleMins !== null && (
-                <p style={{ fontSize: 12, color: C.gold, marginBottom: 8 }}>
+                <p style={{ fontSize: 12, color: T.gold, marginBottom: 8 }}>
                   ⏱ Took {fmtDuration(settleMins)} to fall asleep
                 </p>
               )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <div>
-                  <label style={gStyle.label}>Start</label>
-                  <TimeSelect value={nap.start} onChange={(v) => updateNap(idx, "start", v)} disabled={isCoach} placeholder="Start…" />
+                  <label style={{ ...gStyle.label, color: T.mid }}>Start</label>
+                  <TimeSelect dark={isDark} value={nap.start} onChange={(v) => updateNap(idx, "start", v)} disabled={isCoach} placeholder="Start…" />
                 </div>
                 <div>
-                  <label style={gStyle.label}>End</label>
-                  <TimeSelect value={nap.end} onChange={(v) => updateNap(idx, "end", v)} disabled={isCoach} placeholder="End…" />
+                  <label style={{ ...gStyle.label, color: T.mid }}>End</label>
+                  <TimeSelect dark={isDark} value={nap.end} onChange={(v) => updateNap(idx, "end", v)} disabled={isCoach} placeholder="End…" />
                 </div>
               </div>
               {!isCoach && (
@@ -3259,7 +3587,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                 </div>
               )}
               {nap.start && !nap.end && (
-                <p style={{ fontSize: 12, color: C.blue, marginBottom: 10 }}>
+                <p style={{ fontSize: 12, color: T.blue, marginBottom: 10 }}>
                   😴 Napping now — {fmtDuration(diffMins(parseTime(nap.start), parseTime(nowTick)))} so far
                 </p>
               )}
@@ -3288,26 +3616,26 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                 </div>
               )}
               <div style={{ marginBottom: 10 }}>
-                <label style={gStyle.label}>How did they fall asleep?</label>
-                <SuggestField value={nap.how_fell_asleep} suggestions={suggestionPools.howFellAsleep}
+                <label style={{ ...gStyle.label, color: T.mid }}>How did they fall asleep?</label>
+                <SuggestField dark={isDark} value={nap.how_fell_asleep} suggestions={suggestionPools.howFellAsleep}
                   placeholder="e.g. fed to sleep, rocked, independently, with dummy..."
                   onChange={(v) => updateNap(idx, "how_fell_asleep", v)} disabled={isCoach} />
               </div>
               <div style={{ marginBottom: 10 }}>
-                <label style={gStyle.label}>Where did they nap?</label>
-                <SuggestField value={nap.location} suggestions={suggestionPools.location}
+                <label style={{ ...gStyle.label, color: T.mid }}>Where did they nap?</label>
+                <SuggestField dark={isDark} value={nap.location} suggestions={suggestionPools.location}
                   placeholder="e.g. cot, pram, carrier, car, arms..."
                   onChange={(v) => updateNap(idx, "location", v)} disabled={isCoach} />
               </div>
               <div style={{ marginBottom: 10 }}>
-                <label style={gStyle.label}>Did they need to be resettled or woken up?</label>
-                <SuggestField value={nap.resettled} suggestions={suggestionPools.resettled}
+                <label style={{ ...gStyle.label, color: T.mid }}>Did they need to be resettled or woken up?</label>
+                <SuggestField dark={isDark} value={nap.resettled} suggestions={suggestionPools.resettled}
                   placeholder="e.g. no, once after 30 min, multiple times..."
                   onChange={(v) => updateNap(idx, "resettled", v)} disabled={isCoach} />
               </div>
               <div>
-                <label style={gStyle.label}>Additional nap notes/how was their temperament on waking up?</label>
-                <SuggestField value={nap.notes} suggestions={suggestionPools.napNotes} minHeight={60}
+                <label style={{ ...gStyle.label, color: T.mid }}>Additional nap notes/how was their temperament on waking up?</label>
+                <SuggestField dark={isDark} value={nap.notes} suggestions={suggestionPools.napNotes} minHeight={60}
                   placeholder="e.g. attempted to put them down earlier and it didn't work"
                   onChange={(v) => updateNap(idx, "notes", v)} disabled={isCoach} />
               </div>
@@ -3317,17 +3645,17 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
       </div>
 
       {/* Daytime behaviour */}
-      <div style={gStyle.card}>
-        <h3 style={{ fontFamily: font.display, color: C.blue, margin: "0 0 8px" }}>Daytime Behaviour & Activities</h3>
-        <p style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>e.g. nursery/kindy, home all day, multiple meltdowns, good mood, teething, unwell...</p>
-        <SuggestField value={entry.daytime_notes} suggestions={suggestionPools.daytimeNotes} minHeight={80}
+      <div style={{ ...gStyle.card, background: T.white, borderColor: T.border }}>
+        <h3 style={{ fontFamily: font.display, color: T.blue, margin: "0 0 8px" }}>Daytime Behaviour & Activities</h3>
+        <p style={{ fontSize: 12, color: T.muted, marginBottom: 12 }}>e.g. nursery/kindy, home all day, multiple meltdowns, good mood, teething, unwell...</p>
+        <SuggestField dark={isDark} value={entry.daytime_notes} suggestions={suggestionPools.daytimeNotes} minHeight={80}
           placeholder="Notes about the day..."
           onChange={(v) => update("daytime_notes", v)} disabled={isCoach} />
       </div>
 
       {/* Bedtime */}
-      <div style={gStyle.card}>
-        <h3 style={{ fontFamily: font.display, color: C.blue, margin: "0 0 16px" }}>Bedtime</h3>
+      <div style={{ ...gStyle.card, background: T.white, borderColor: T.border }}>
+        <h3 style={{ fontFamily: font.display, color: T.blue, margin: "0 0 16px" }}>Bedtime</h3>
         {(() => {
           const lastNapEnd = [...(entry.naps || [])].reverse().find(n => n.end)?.end;
           const wwToBed = lastNapEnd && entry.bed_time
@@ -3335,24 +3663,24 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           const wwFromWake = !lastNapEnd && entry.wake_time && entry.bed_time
             ? diffMins(parseTime(entry.wake_time), parseTime(entry.bed_time)) : null;
           return (wwToBed || wwFromWake) ? (
-            <p style={{ fontSize: 12, color: C.gold, marginBottom: 12 }}>
+            <p style={{ fontSize: 12, color: T.gold, marginBottom: 12 }}>
               ⏱ Wake window to bed: {fmtDuration(wwToBed ?? wwFromWake)}
             </p>
           ) : null;
         })()}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div>
-            <label style={gStyle.label}>Bedtime routine started</label>
-            <TimeSelect value={entry.routine_start_time} onChange={(v) => update("routine_start_time", v)} disabled={isCoach} placeholder="Select time…" />
+            <label style={{ ...gStyle.label, color: T.mid }}>Bedtime routine started</label>
+            <TimeSelect dark={isDark} value={entry.routine_start_time} onChange={(v) => update("routine_start_time", v)} disabled={isCoach} placeholder="Select time…" />
           </div>
           <div>
-            <label style={gStyle.label}>Time into bed</label>
-            <TimeSelect value={entry.into_bed_time} onChange={(v) => update("into_bed_time", v)} disabled={isCoach} placeholder="Select time…" />
+            <label style={{ ...gStyle.label, color: T.mid }}>Time into bed</label>
+            <TimeSelect dark={isDark} value={entry.into_bed_time} onChange={(v) => update("into_bed_time", v)} disabled={isCoach} placeholder="Select time…" />
           </div>
         </div>
         <div style={{ marginBottom: 12 }}>
-          <label style={gStyle.label}>Time went to sleep</label>
-          <TimeSelect value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
+          <label style={{ ...gStyle.label, color: T.mid }}>Time went to sleep</label>
+          <TimeSelect dark={isDark} value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
           {bedFlag && (
             <div style={{
               background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
@@ -3383,13 +3711,13 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           )}
         </div>
         <div style={{ marginBottom: 12 }}>
-          <label style={gStyle.label}>How did they fall asleep?</label>
-          <SuggestField value={entry.bedtime_how_fell_asleep} suggestions={suggestionPools.howFellAsleep}
+          <label style={{ ...gStyle.label, color: T.mid }}>How did they fall asleep?</label>
+          <SuggestField dark={isDark} value={entry.bedtime_how_fell_asleep} suggestions={suggestionPools.howFellAsleep}
             placeholder="e.g. fed to sleep, rocked, independently, with dummy..."
             onChange={(v) => update("bedtime_how_fell_asleep", v)} disabled={isCoach} />
         </div>
         <div style={{ marginBottom: 12 }}>
-          <label style={gStyle.label}>Times woke overnight</label>
+          <label style={{ ...gStyle.label, color: T.mid }}>Times woke overnight</label>
 
           {/* Mode toggle — only one method's fields are ever active/saved at once */}
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -3398,9 +3726,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
               disabled={isCoach}
               style={{
                 ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12,
-                background: wakingMode === "simple" ? C.terracotta : "transparent",
-                color: wakingMode === "simple" ? C.white : C.terracottaDark,
-                borderColor: C.terracotta,
+                background: wakingMode === "simple" ? T.terracotta : "transparent",
+                color: wakingMode === "simple" ? T.white : T.terracottaDark,
+                borderColor: T.terracotta,
               }}>
               Quick totals
             </button>
@@ -3409,9 +3737,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
               disabled={isCoach}
               style={{
                 ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12,
-                background: wakingMode === "detailed" ? C.terracotta : "transparent",
-                color: wakingMode === "detailed" ? C.white : C.terracottaDark,
-                borderColor: C.terracotta,
+                background: wakingMode === "detailed" ? T.terracotta : "transparent",
+                color: wakingMode === "detailed" ? T.white : T.terracottaDark,
+                borderColor: T.terracotta,
               }}>
               Log each waking
             </button>
@@ -3428,8 +3756,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
           {wakingMode === "simple" ? (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 12 }}>
               <div>
-                <label style={gStyle.label}>Number of wakes</label>
-                <select style={{ ...gStyle.input, cursor: "pointer" }}
+                <label style={{ ...gStyle.label, color: T.mid }}>Number of wakes</label>
+                <select style={{ ...gStyle.input, cursor: "pointer", background: T.white, borderColor: T.border, color: T.dark }}
                   value={entry.night_wakings_count || ""}
                   onChange={(e) => update("night_wakings_count", e.target.value)}
                   disabled={isCoach}>
@@ -3440,8 +3768,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                 </select>
               </div>
               <div>
-                <label style={gStyle.label}>Total time awake overnight</label>
-                <DurationSelect
+                <label style={{ ...gStyle.label, color: T.mid }}>Total time awake overnight</label>
+                <DurationSelect dark={isDark}
                   value={entry.night_wakings_awake_mins}
                   onChange={(v) => update("night_wakings_awake_mins", v)}
                   disabled={isCoach}
@@ -3449,8 +3777,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                 />
               </div>
               <div>
-                <label style={gStyle.label}>Night waking notes</label>
-                <SuggestField value={entry.night_wakings_notes} suggestions={suggestionPools.nightWakingNotes} multiline={false}
+                <label style={{ ...gStyle.label, color: T.mid }}>Night waking notes</label>
+                <SuggestField dark={isDark} value={entry.night_wakings_notes} suggestions={suggestionPools.nightWakingNotes} multiline={false}
                   placeholder="e.g. awake 2am for 45 min, resettled with feed..."
                   onChange={(v) => update("night_wakings_notes", v)} disabled={isCoach} />
               </div>
@@ -3462,24 +3790,24 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                   ? diffMins(parseTime(w.woke_at), parseTime(w.back_asleep_at)) : null;
                 const wakeFlag = implausibleDuration(w.woke_at, w.back_asleep_at, WAKING_MAX_PLAUSIBLE_MINS);
                 return (
-                  <div key={idx} style={{ borderTop: idx > 0 ? `1px solid ${C.border}` : "none", paddingTop: idx > 0 ? 12 : 0, marginTop: idx > 0 ? 12 : 0 }}>
+                  <div key={idx} style={{ borderTop: idx > 0 ? `1px solid ${T.border}` : "none", paddingTop: idx > 0 ? 12 : 0, marginTop: idx > 0 ? 12 : 0 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <span style={{ fontWeight: 700, fontSize: 13, color: C.mid }}>Waking {idx + 1}</span>
+                      <span style={{ fontWeight: 700, fontSize: 13, color: T.mid }}>Waking {idx + 1}</span>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                        {dur !== null && <span style={gStyle.tag(C.blue, C.blueLight)}>{fmtDuration(dur)}</span>}
+                        {dur !== null && <span style={gStyle.tag(T.blue, T.blueLight)}>{fmtDuration(dur)}</span>}
                         {!isCoach && (
-                          <button onClick={() => removeWaking(idx)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16 }}>×</button>
+                          <button onClick={() => removeWaking(idx)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 16 }}>×</button>
                         )}
                       </div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                       <div>
-                        <label style={gStyle.label}>Woke at</label>
-                        <TimeSelect value={w.woke_at} onChange={(v) => updateWaking(idx, "woke_at", v)} disabled={isCoach} placeholder="Time…" />
+                        <label style={{ ...gStyle.label, color: T.mid }}>Woke at</label>
+                        <TimeSelect dark={isDark} value={w.woke_at} onChange={(v) => updateWaking(idx, "woke_at", v)} disabled={isCoach} placeholder="Time…" />
                       </div>
                       <div>
-                        <label style={gStyle.label}>Back asleep at</label>
-                        <TimeSelect value={w.back_asleep_at} onChange={(v) => updateWaking(idx, "back_asleep_at", v)} disabled={isCoach} placeholder="Time…" />
+                        <label style={{ ...gStyle.label, color: T.mid }}>Back asleep at</label>
+                        <TimeSelect dark={isDark} value={w.back_asleep_at} onChange={(v) => updateWaking(idx, "back_asleep_at", v)} disabled={isCoach} placeholder="Time…" />
                       </div>
                     </div>
                     {!isCoach && (
@@ -3495,7 +3823,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                       </div>
                     )}
                     {w.woke_at && !w.back_asleep_at && (
-                      <p style={{ fontSize: 12, color: C.blue, marginTop: 8 }}>
+                      <p style={{ fontSize: 12, color: T.blue, marginTop: 8 }}>
                         👀 Awake now — {fmtDuration(diffMins(parseTime(w.woke_at), parseTime(nowTick)))} so far
                       </p>
                     )}
@@ -3532,21 +3860,21 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
                 </button>
               )}
               {detailedWakingTotals.count > 0 && (
-                <p style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>
+                <p style={{ fontSize: 12, color: T.muted, marginTop: 10 }}>
                   {detailedWakingTotals.count} waking{detailedWakingTotals.count !== 1 ? "s" : ""} · {fmtDuration(detailedWakingTotals.mins)} total time awake
                 </p>
               )}
               <div style={{ marginTop: 12 }}>
-                <label style={gStyle.label}>Night waking notes</label>
-                <SuggestField value={entry.night_wakings_notes} suggestions={suggestionPools.nightWakingNotes} multiline={false}
+                <label style={{ ...gStyle.label, color: T.mid }}>Night waking notes</label>
+                <SuggestField dark={isDark} value={entry.night_wakings_notes} suggestions={suggestionPools.nightWakingNotes} multiline={false}
                   placeholder="e.g. awake 2am for 45 min, resettled with feed..."
                   onChange={(v) => update("night_wakings_notes", v)} disabled={isCoach} />
               </div>
             </div>
           )}
         </div>
-        <label style={gStyle.label}>General notes</label>
-        <SuggestField value={entry.notes} suggestions={suggestionPools.generalNotes} minHeight={80}
+        <label style={{ ...gStyle.label, color: T.mid }}>General notes</label>
+        <SuggestField dark={isDark} value={entry.notes} suggestions={suggestionPools.generalNotes} minHeight={80}
           placeholder="How was settling? Anything else to note..."
           onChange={(v) => update("notes", v)} disabled={isCoach} />
       </div>
@@ -3554,7 +3882,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
       {/* Date nav (bottom) */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 20, marginBottom: 20 }}>
         <button onClick={() => changeDate(-1)} style={{ ...gStyle.btnSecondary, padding: "8px 14px" }}>←</button>
-        <input type="date" style={{ ...gStyle.input, flex: 1, textAlign: "center" }}
+        <input type="date" style={{ ...gStyle.input, flex: 1, textAlign: "center", background: T.white, borderColor: T.border, color: T.dark }}
           value={selectedDate} onChange={(e) => handleDateChange(e.target.value)}
           max={today()}
         />
@@ -3564,7 +3892,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked }) {
 
       {/* Save indicator */}
       {!isCoach && (
-        <p style={{ textAlign: "center", fontSize: 12, color: savedMsg ? C.success : C.muted }}>
+        <p style={{ textAlign: "center", fontSize: 12, color: savedMsg ? T.success : T.muted }}>
           {savedMsg ? "✓ Saved automatically" : saving ? "Saving…" : "Changes save automatically"}
         </p>
       )}
@@ -3581,6 +3909,20 @@ function SleepAnalysis({ client, isCoach }) {
   // Date range filter — narrows the charts/summary/table to a window within the full diary.
   const [rangeStart, setRangeStart] = useState("");
   const [rangeEnd, setRangeEnd] = useState("");
+
+  // Days manually excluded from the numbers below (illness, travel, an
+  // otherwise-not-a-normal-day) — an ephemeral, per-session choice like the
+  // date-range presets, not saved to Supabase, so it resets next visit rather
+  // than permanently hiding data. Available to coach and client alike.
+  const [excludedDates, setExcludedDates] = useState(new Set());
+  const [excludeOpen, setExcludeOpen] = useState(false);
+  const toggleExcludeDate = (date) => {
+    setExcludedDates(prev => {
+      const next = new Set(prev);
+      if (next.has(date)) next.delete(date); else next.add(date);
+      return next;
+    });
+  };
 
   // Compare mode — put a "before" and "after" period side by side for client-facing snapshots.
   const [compareOpen, setCompareOpen] = useState(false);
@@ -3691,11 +4033,15 @@ function SleepAnalysis({ client, isCoach }) {
   });
 
   // ── Date range filter — narrows which days feed the summary/charts/table ──
+  // minDate/maxDate stay based on the FULL history (unaffected by excluded
+  // days) so the date pickers/presets keep their normal bounds; the exclusion
+  // only removes those days from the actual calculations below.
   const minDate = days[0].date;
   const maxDate = days[days.length - 1].date;
+  const activeDays = days.filter(d => !excludedDates.has(d.date));
   const effStart = rangeStart || minDate;
   const effEnd   = rangeEnd   || maxDate;
-  const filteredDays = days.filter(d => d.date >= effStart && d.date <= effEnd);
+  const filteredDays = activeDays.filter(d => d.date >= effStart && d.date <= effEnd);
   const isFiltered = effStart !== minDate || effEnd !== maxDate;
   const fmtDateLabel = (dstr) => new Date(dstr + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
 
@@ -3710,6 +4056,36 @@ function SleepAnalysis({ client, isCoach }) {
   const summary = summarize(filteredDays);
   const { avgNap, avgNight, avgTotal, avgNapCount, avgWW, avgNightWakings, completeDays } = summary;
 
+  // ── Plain-language trend sentence — visible to coach AND client ───────────
+  // Unlike Compare Periods (coach-only, manual date pickers, a full delta
+  // table), this is a small always-on "here's roughly how things are
+  // trending" sentence so a client sees something meaningful the moment they
+  // open the tab, without needing to set anything up themselves. It splits
+  // whatever range is currently selected into an early slice and a late
+  // slice and only mentions a metric if it actually moved by a meaningful
+  // amount, so a flat/steady patch doesn't produce a misleading sentence.
+  const insightWindow = Math.min(7, Math.floor(filteredDays.length / 2));
+  let insightSentence = "";
+  if (insightWindow >= 2) {
+    const earlySummary = summarize(filteredDays.slice(0, insightWindow));
+    const lateSummary = summarize(filteredDays.slice(-insightWindow));
+    const bits = [];
+    if (earlySummary.avgNightWakings !== null && lateSummary.avgNightWakings !== null && earlySummary.avgNightWakings !== lateSummary.avgNightWakings) {
+      bits.push(`night wakings have gone from ${earlySummary.avgNightWakings} to ${lateSummary.avgNightWakings} times a night`);
+    }
+    if (earlySummary.avgTotal !== null && lateSummary.avgTotal !== null && Math.abs(lateSummary.avgTotal - earlySummary.avgTotal) >= 10) {
+      const dir = lateSummary.avgTotal > earlySummary.avgTotal ? "up" : "down";
+      bits.push(`total sleep is ${dir} from ${fmtDuration(earlySummary.avgTotal)} to ${fmtDuration(lateSummary.avgTotal)} a day`);
+    }
+    if (earlySummary.avgNight !== null && lateSummary.avgNight !== null && Math.abs(lateSummary.avgNight - earlySummary.avgNight) >= 10) {
+      const dir = lateSummary.avgNight > earlySummary.avgNight ? "up" : "down";
+      bits.push(`night sleep is ${dir} from ${fmtDuration(earlySummary.avgNight)} to ${fmtDuration(lateSummary.avgNight)}`);
+    }
+    if (bits.length > 0) {
+      insightSentence = `Over this period, ${bits.slice(0, 2).join(", and ")}.`;
+    }
+  }
+
   // ── Compare two periods (e.g. "when we started" vs "now") ─────────────────
   const totalSpanDays = Math.max(0, daysBetween(minDate, maxDate));
   const defaultWindow = Math.min(6, totalSpanDays); // 7-day window by default
@@ -3717,8 +4093,8 @@ function SleepAnalysis({ client, isCoach }) {
   const pAEnd   = periodAEnd   || offsetDate(minDate, defaultWindow);
   const pBStart = periodBStart || offsetDate(maxDate, -defaultWindow);
   const pBEnd   = periodBEnd   || maxDate;
-  const periodADays = days.filter(d => d.date >= pAStart && d.date <= pAEnd);
-  const periodBDays = days.filter(d => d.date >= pBStart && d.date <= pBEnd);
+  const periodADays = activeDays.filter(d => d.date >= pAStart && d.date <= pAEnd);
+  const periodBDays = activeDays.filter(d => d.date >= pBStart && d.date <= pBEnd);
   const summaryA = summarize(periodADays);
   const summaryB = summarize(periodBDays);
 
@@ -3752,6 +4128,49 @@ function SleepAnalysis({ client, isCoach }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {}
+  };
+
+  // Branded, shareable PNG of the headline — built directly on a <canvas>
+  // rather than pulling in an html-to-image library, since this file has no
+  // build step to install one into. Gives Chloé something she can text/share
+  // instead of a screenshot of the app chrome.
+  const downloadHeadlineImage = () => {
+    if (!headline) return;
+    const W = 1200, H = 630;
+    const canvas = document.createElement("canvas");
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext("2d");
+
+    ctx.fillStyle = C.cream;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = C.terracotta;
+    ctx.fillRect(0, 0, W, 14);
+
+    ctx.fillStyle = C.terracotta;
+    ctx.font = "700 40px Georgia, serif";
+    ctx.fillText("Signs for Sleep", 64, 100);
+    ctx.fillStyle = C.gold;
+    ctx.font = "600 14px 'DM Sans', sans-serif";
+    ctx.fillText("SUPPORTING SLEEP THROUGH CONNECTION AND COMMUNICATION", 64, 126);
+
+    ctx.fillStyle = C.dark;
+    ctx.font = "italic 32px Georgia, serif";
+    canvasWrapText(ctx, `"${headline}"`, 64, 230, W - 128, 44);
+
+    ctx.fillStyle = C.mid;
+    ctx.font = "16px 'DM Sans', sans-serif";
+    ctx.fillText(`Before: ${fmtDateLabel(pAStart)} – ${fmtDateLabel(pAEnd)}    →    After: ${fmtDateLabel(pBStart)} – ${fmtDateLabel(pBEnd)}`, 64, H - 64);
+    ctx.fillText(`For ${client.name}`, 64, H - 36);
+
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(client.name || "client").replace(/\s+/g, "_")}_sleep_progress.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
   };
 
   // ── SVG line chart helper ─────────────────────────────────
@@ -3902,7 +4321,7 @@ function SleepAnalysis({ client, isCoach }) {
             Sleep Analysis
           </h2>
           <p style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>
-            {filteredDays.length} of {days.length} days logged shown · {completeDays} complete · averages exclude incomplete days
+            {filteredDays.length} of {days.length} days logged shown{excludedDates.size > 0 ? ` (${excludedDates.size} excluded)` : ""} · {completeDays} complete · averages exclude incomplete days
           </p>
         </div>
         <button
@@ -3950,6 +4369,10 @@ function SleepAnalysis({ client, isCoach }) {
                 {p.label}
               </button>
             ))}
+            <button onClick={() => setExcludeOpen(o => !o)}
+              style={{ ...gStyle.btnSecondary, padding: "8px 14px", fontSize: 12 }}>
+              {excludedDates.size > 0 ? `🚫 ${excludedDates.size} day${excludedDates.size !== 1 ? "s" : ""} excluded` : "Exclude specific days"}
+            </button>
             {isCoach && (
               <button onClick={() => setCompareOpen(o => !o)}
                 style={{ ...gStyle.btnGold, padding: "8px 14px", fontSize: 12 }}>
@@ -3967,7 +4390,54 @@ function SleepAnalysis({ client, isCoach }) {
             </button>
           </p>
         )}
+
+        {/* Exclude specific days — a temporary, per-visit choice (nothing is
+            saved), same idea as the preset buttons above but for individual
+            days rather than a range. Useful for illness, travel, or any day
+            that isn't representative and would otherwise skew the averages. */}
+        {excludeOpen && (
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+            <p style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+              Tap any day to leave it out of the averages, charts and table below (and out of Compare Periods) — this isn't saved, so it resets next time you open this tab. Days tagged in the diary are marked for reference.
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 220, overflowY: "auto" }}>
+              {days.filter(d => d.date >= effStart && d.date <= effEnd).map((d) => {
+                const excluded = excludedDates.has(d.date);
+                const dayTags = (entries.find(e => e.date === d.date)?.tags || []);
+                const emoji = dayTags.length > 0 ? DIARY_TAGS.find(t => t.key === dayTags[0])?.emoji : null;
+                return (
+                  <button key={d.date} onClick={() => toggleExcludeDate(d.date)}
+                    style={{
+                      padding: "6px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                      border: `1px solid ${excluded ? C.danger : C.border}`,
+                      background: excluded ? C.dangerLight : C.white,
+                      color: excluded ? C.danger : C.mid,
+                      textDecoration: excluded ? "line-through" : "none",
+                    }}
+                  >
+                    {emoji ? `${emoji} ` : ""}{d.label}
+                  </button>
+                );
+              })}
+            </div>
+            {excludedDates.size > 0 && (
+              <button onClick={() => setExcludedDates(new Set())}
+                style={{ marginTop: 10, background: "none", border: "none", color: C.terracotta, textDecoration: "underline", cursor: "pointer", fontSize: 12, padding: 0 }}>
+                Clear all exclusions
+              </button>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Plain-language trend sentence — visible to coach and client alike */}
+      {insightSentence && (
+        <div style={{ ...gStyle.card, marginBottom: 20, background: C.blueLight, border: "none" }}>
+          <p style={{ fontSize: 14, color: C.blueDark, lineHeight: 1.5, margin: 0, fontStyle: "italic" }}>
+            💡 {insightSentence}
+          </p>
+        </div>
+      )}
 
       {/* Compare two periods — e.g. "when we started" vs "now" — coach-only */}
       {isCoach && compareOpen && (
@@ -4045,10 +4515,16 @@ function SleepAnalysis({ client, isCoach }) {
               <div style={{ fontSize: 14, color: C.terracottaDark, fontStyle: "italic", lineHeight: 1.5 }}>
                 "{headline}"
               </div>
-              <button className="no-print" style={{ ...gStyle.btnSecondary, whiteSpace: "nowrap", flexShrink: 0 }}
-                onClick={copyHeadline}>
-                {copied ? "Copied!" : "Copy"}
-              </button>
+              <div className="no-print" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                <button style={{ ...gStyle.btnSecondary, whiteSpace: "nowrap" }}
+                  onClick={copyHeadline}>
+                  {copied ? "Copied!" : "Copy"}
+                </button>
+                <button style={{ ...gStyle.btnSecondary, whiteSpace: "nowrap" }}
+                  onClick={downloadHeadlineImage}>
+                  ⬇ Download image
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -6148,6 +6624,9 @@ function ClientResourcesViewer({ clientId }) {
   // collapsed, letting a client scan the list of headings + counts and jump
   // straight to the one they want instead of scrolling past every video.
   const [expandedCats, setExpandedCats] = useState(new Set());
+  // Keyword search — when a client remembers roughly what a resource was
+  // about but not which category it's filed under.
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     const load = async () => {
@@ -6180,7 +6659,18 @@ function ClientResourcesViewer({ clientId }) {
     </div>
   );
 
-  const grouped = groupByCategory(accessible);
+  const groupedAll = groupByCategory(accessible);
+  const query = searchQuery.trim().toLowerCase();
+  const matchesSearch = (r) => !query || r.title?.toLowerCase().includes(query) || r.description?.toLowerCase().includes(query);
+
+  // While searching, narrow each category down to matching items and drop
+  // categories with none, and force the surviving ones open — a search
+  // result hidden behind a collapsed heading would defeat the point.
+  const grouped = {};
+  Object.keys(groupedAll).forEach((cat) => {
+    const items = query ? groupedAll[cat].filter(matchesSearch) : groupedAll[cat];
+    if (items.length > 0) grouped[cat] = items;
+  });
   const categories = Object.keys(grouped).sort();
 
   const toggleCategory = (cat) => {
@@ -6193,9 +6683,29 @@ function ClientResourcesViewer({ clientId }) {
 
   return (
     <div>
+      <div style={{ position: "relative", marginBottom: 18 }}>
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="🔍 Search resources by keyword…"
+          style={{ ...gStyle.input, padding: "12px 16px" }}
+        />
+        {query && (
+          <button onClick={() => setSearchQuery("")} style={{
+            position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+            background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16,
+          }}>×</button>
+        )}
+      </div>
+      {query && categories.length === 0 && (
+        <div style={{ ...gStyle.card, textAlign: "center", padding: 32, color: C.muted }}>
+          No resources match "{searchQuery}".
+        </div>
+      )}
       {categories.map((cat) => {
         const items = grouped[cat];
-        const isOpen = expandedCats.has(cat);
+        const isOpen = query ? true : expandedCats.has(cat);
         return (
           <div key={cat} style={{ marginBottom: 16 }}>
             <button
