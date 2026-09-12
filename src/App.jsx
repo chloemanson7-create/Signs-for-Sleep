@@ -1008,6 +1008,17 @@ const INTAKE_SECTIONS = [
     ],
   },
   {
+  title: "Family & Household",
+  fields: [
+    { key: "household_members", label: "Who lives in the household, including other children and their ages?", type: "textarea" },
+    { key: "sleep_space_sharing", label: "Does your child share a room with a sibling, or is a room-share/co-sleeping situation part of your setup?", type: "textarea" },
+    { key: "caregiver_night_roles", label: "Who currently handles night wakings, and how is that shared between caregivers?", type: "textarea" },
+    { key: "other_support", label: "Do you have regular support from family, friends, or paid help (e.g. grandparents, a cleaner, a nanny)?", type: "textarea" },
+    { key: "pets_household", label: "Any pets in the home that are part of the sleep environment (e.g. sleep in the bedroom)?", type: "text" },
+    { key: "household_noise", label: "Is the home generally quiet, or is there regular noise/activity during nap and bed times (other kids, traffic, shared walls, etc.)?", type: "textarea" },
+  ],
+},
+  {
     title: "Child's Health History",
     fields: [
       { key: "birth_type", label: "How was your baby born?", type: "select", options: ["Vaginally","Caesarean","Vaginal after caesarean (VBAC)","Assisted (forceps/vacuum)"] },
@@ -1032,10 +1043,13 @@ const INTAKE_SECTIONS = [
       { key: "night_wakings_notes", label: "Any additional details about night wakings", type: "textarea" },
       { key: "nap_number", label: "How many naps per day?", type: "select", options: Array.from({ length: 16 }, (_, i) => `${i}`) },
       { key: "nap_details", label: "Describe a typical nap (duration, location, how they fall asleep)", type: "textarea" },
-      { key: "wake_window", label: "What is your child's typical wake window before becoming tired?", type: "text" },
+      { key: "wake_window", label: "What is your child's typical amount of time awake before becoming tired?", type: "text" },
       { key: "tired_cues", label: "What tired cues does your child show? (select all that apply)", type: "multicheck", options: TIRED_CUES, otherKey: "tired_cues_other" },
       { key: "sleep_problem_overview", label: "Please give a brief overview of your child's sleep problem/issue and what methods (if any) you have tried so far to alleviate this.", type: "textarea" },
       { key: "daytime_temperament", label: "What is your child's temperament usually like during the day?", type: "textarea" },
+      { key: "daytime_rhythm", label: "What does a typical day look like outside of sleep — outdoor time, movement, screen time, daylight exposure?", type: "textarea" },
+{ key: "temperament_sensory", label: "Would you describe your child as sensitive to their environment (noise, light, touch, transitions), or fairly easygoing?", type: "textarea" },
+{ key: "siblings_impact", label: "If you have other children, how does their routine or sleep interact with this child's sleep?", type: "textarea" },
     ],
   },
   {
@@ -1044,17 +1058,36 @@ const INTAKE_SECTIONS = [
       { key: "feeding_type", label: "How is your child currently fed? (breastfed / expressed / formula / solids / combination)", type: "text" },
       { key: "meal_times", label: "What are your child's approximate meal/feed times in 24 hours?", type: "textarea" },
       { key: "night_feeds", label: "Does your child feed overnight? How often and how long?", type: "textarea" },
-      { key: "feed_to_sleep", label: "Does your child feed to sleep?", type: "text" },
+      { key: "feed_to_sleep", label: "Is there anything you are doing in relation to getting your child to/back to sleep that you want to stop doing?", type: "text" },
       { key: "solids_started", label: "Have solids been introduced? If so, how are they with eating (amount/variation/enjoy or dislike meal times etc.)?", type: "textarea" },
       { key: "feeding_concerns", label: "Any feeding concerns or difficulties?", type: "textarea" },
     ],
   },
   {
+  title: "You & Your Wellbeing",
+  fields: [
+    { key: "parent_sleep_impact", label: "How is your own sleep and energy being affected right now?", type: "textarea" },
+    { key: "capacity_for_change", label: "Realistically, how much time and energy do you feel you have for making changes at the moment?", type: "textarea" },
+    { key: "support_network", label: "Who do you feel you can lean on for support during this process?", type: "textarea" },
+    { key: "previous_approaches_feelings", label: "If you've tried other sleep approaches before, how did they feel to follow — for you, not just whether they worked?", type: "textarea" },
+    { key: "non_negotiables", label: "Is there anything you know you're not willing to try, or won't work for your family, regardless of whether it 'works' (e.g. co-sleeping, waking your baby up at a set time each morning even if they're still asleep)?", type: "textarea" },
+  ],
+},
+  {
+  title: "Parenting Values & Approach",
+  fields: [
+    { key: "parenting_style", label: "How would you describe your parenting style or values? (e.g. attachment-focused, routine-based, gentle/responsive, still figuring it out)", type: "textarea" },
+    { key: "cultural_family_considerations", label: "Are there any cultural, family, or personal values around sleep, feeding, or parenting that are important to factor in?", type: "textarea" },
+    { key: "communication_tools", label: "Do you currently use any signing, key words, or other communication tools with your child? Is this something you'd like to learn more about & how it can help with sleep?", type: "textarea" },
+    { key: "caregiver_alignment", label: "If there are two (or more) caregivers, are you both/all aligned on the approach you'd like to take? Any differences worth knowing about?", type: "textarea" },
+  ],
+},
+  {
     title: "Your Concerns & Goals",
     fields: [
       { key: "main_concerns", label: "What are your main sleep concerns?", type: "textarea" },
       { key: "family_impact", label: "Explain how the problem/issue affects you, your child and the rest of the family.", type: "textarea" },
-      { key: "what_tried", label: "What approaches have you already tried?", type: "textarea" },
+      { key: "what_tried", label: "What approaches have you already tried, if any?", type: "textarea" },
       { key: "goals", label: "What does success look like for you? What are your sleep goals?", type: "textarea" },
       { key: "anything_else", label: "Is there anything else you'd like me to know before we start?", type: "textarea" },
     ],
