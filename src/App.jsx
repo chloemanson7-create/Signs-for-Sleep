@@ -1360,9 +1360,11 @@ function LoginScreen({ onLogin }) {
 // COACH APP
 // ═══════════════════════════════════════════════════════════════════════════
 function CoachApp({ session, onLogout }) {
-  const [view, setView] = useState("dashboard"); // dashboard | client | resources | settings
+  const [view, setView] = useState("dashboard"); // dashboard | client | sensecheck | resources | settings
   const [selectedClient, setSelectedClient] = useState(null);
+  const [selectedSenseCheck, setSelectedSenseCheck] = useState(null);
   const [clients, setClients] = useState([]);
+  const [senseChecks, setSenseChecks] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const fetchClients = useCallback(async () => {
@@ -1374,10 +1376,21 @@ function CoachApp({ session, onLogout }) {
     setLoading(false);
   }, []);
 
-  useEffect(() => { fetchClients(); }, [fetchClients]);
+  // Sleep Sense-Check Consults (one-off call + written summary, no app login)
+  const fetchSenseChecks = useCallback(async () => {
+    const { data } = await supabase
+      .from("sense_check_clients")
+      .select("*")
+      .order("created_at", { ascending: false });
+    setSenseChecks(data || []);
+  }, []);
+
+  useEffect(() => { fetchClients(); fetchSenseChecks(); }, [fetchClients, fetchSenseChecks]);
 
   const openClient = (c) => { setSelectedClient(c); setView("client"); };
   const back = () => { setView("dashboard"); setSelectedClient(null); fetchClients(); };
+  const openSenseCheck = (c) => { setSelectedSenseCheck(c); setView("sensecheck"); };
+  const backFromSenseCheck = () => { setView("dashboard"); setSelectedSenseCheck(null); fetchSenseChecks(); };
 
   return (
     <div style={gStyle.app}>
@@ -1393,10 +1406,22 @@ function CoachApp({ session, onLogout }) {
       />
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 16px" }}>
         {view === "dashboard" && (
-          <Dashboard clients={clients} loading={loading} onSelectClient={openClient} onRefresh={fetchClients} />
+          <Dashboard
+            clients={clients}
+            senseChecks={senseChecks}
+            loading={loading}
+            onSelectClient={openClient}
+            onSelectSenseCheck={openSenseCheck}
+            onRefresh={fetchClients}
+            onRefreshSenseChecks={fetchSenseChecks}
+            onOpenSettings={() => setView("settings")}
+          />
         )}
         {view === "client" && selectedClient && (
           <ClientDetail client={selectedClient} onBack={back} onRefresh={fetchClients} />
+        )}
+        {view === "sensecheck" && selectedSenseCheck && (
+          <SenseCheckDetail record={selectedSenseCheck} onBack={backFromSenseCheck} onRefresh={fetchSenseChecks} />
         )}
         {view === "resources" && (
           <ResourceLibraryManager onBack={() => setView("dashboard")} />
@@ -1423,8 +1448,11 @@ function Header({ subtitle, right, dark = false }) {
 }
 
 // ── DASHBOARD ───────────────────────────────────────────────────────────────
-function Dashboard({ clients, loading, onSelectClient, onRefresh }) {
+function Dashboard({ clients, senseChecks = [], loading, onSelectClient, onSelectSenseCheck, onRefresh, onRefreshSenseChecks, onOpenSettings }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [showAddSC, setShowAddSC] = useState(false);
+  const [showExport, setShowExport] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
   const [newName, setNewName] = useState("");
   const [newCode, setNewCode] = useState("");
   const [newSupportDays, setNewSupportDays] = useState(DEFAULT_SUPPORT_DAYS);
@@ -1437,6 +1465,7 @@ function Dashboard({ clients, loading, onSelectClient, onRefresh }) {
     setSaving(true);
     await supabase.from("clients").insert({
       name: newName.trim(),
+      ...(newEmail.trim() ? { email: newEmail.trim() } : {}),
       access_code: newCode.trim().toUpperCase(),
       status: "active",
       support_start_date: today(),
@@ -1445,39 +1474,55 @@ function Dashboard({ clients, loading, onSelectClient, onRefresh }) {
     });
     setSaving(false);
     setShowAdd(false);
-    setNewName(""); setNewCode("");
+    setNewName(""); setNewCode(""); setNewEmail("");
     setNewSupportDays(DEFAULT_SUPPORT_DAYS);
     setNewContactEvery(DEFAULT_CONTACT_EVERY);
     onRefresh();
   };
 
-  const filtered = clients.filter((c) =>
-    filter === "all" ? true : c.status === filter
-  );
+  const filtered = filter === "sensecheck"
+    ? []
+    : clients.filter((c) => (filter === "all" ? true : c.status === filter));
+  const visibleSenseChecks = filter === "all" || filter === "sensecheck" ? senseChecks : [];
+  // One list, newest first, so Sense-Check cards sit alongside everyone else
+  const merged = [
+    ...filtered.map((c) => ({ kind: "client", row: c })),
+    ...visibleSenseChecks.map((r) => ({ kind: "sensecheck", row: r })),
+  ].sort((x, y) => new Date(y.row.created_at || 0) - new Date(x.row.created_at || 0));
   const active = clients.filter((c) => c.status === "active").length;
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ fontFamily: font.display, fontSize: 28, color: C.terracotta, margin: 0 }}>My Clients</h1>
-          <p style={{ color: C.muted, fontSize: 14, margin: "4px 0 0" }}>{active} active</p>
+          <p style={{ color: C.muted, fontSize: 14, margin: "4px 0 0" }}>
+            {active} active{senseChecks.length > 0 ? ` · ${senseChecks.length} Sense-Check${senseChecks.length === 1 ? "" : "s"}` : ""}
+          </p>
         </div>
-        <button style={gStyle.btnPrimary} onClick={() => setShowAdd(true)} style={{ ...gStyle.btnPrimary, width: "auto" }}>
-          + Add Client
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button style={gStyle.btnSecondary} onClick={() => setShowExport((v) => !v)}>
+            📊 Export to Sheet
+          </button>
+          <button style={{ ...gStyle.btnSecondary, color: C.blueDark, borderColor: C.blue }} onClick={() => { setShowAddSC(true); setShowAdd(false); }}>
+            + Sense-Check
+          </button>
+          <button onClick={() => { setShowAdd(true); setShowAddSC(false); }} style={{ ...gStyle.btnPrimary, width: "auto" }}>
+            + Add Client
+          </button>
+        </div>
       </div>
 
       {/* Filter tabs */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        {["all", "active", "closed"].map((f) => (
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+        {[["all", "All"], ["active", "Active"], ["closed", "Closed"], ["sensecheck", "Sense-Checks"]].map(([f, label]) => (
           <button key={f} onClick={() => setFilter(f)} style={{
             padding: "6px 16px", borderRadius: 20, border: "none", cursor: "pointer",
             fontFamily: font.body, fontSize: 13, fontWeight: 600,
             background: filter === f ? C.terracotta : C.terracottaLight,
             color: filter === f ? C.white : C.terracottaDark,
           }}>
-            {f.charAt(0).toUpperCase() + f.slice(1)}
+            {label}
           </button>
         ))}
       </div>
@@ -1503,6 +1548,10 @@ function Dashboard({ clients, loading, onSelectClient, onRefresh }) {
               <label style={gStyle.label}>Contact reminder every (days)</label>
               <input style={gStyle.input} type="number" value={newContactEvery} onChange={(e) => setNewContactEvery(e.target.value)} />
             </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={gStyle.label}>Email (optional)</label>
+              <input style={gStyle.input} type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="Used for the Google Sheet export" />
+            </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button style={gStyle.btnPrimary} onClick={addClient} disabled={saving} style={{ ...gStyle.btnPrimary, width: "auto" }}>
@@ -1513,15 +1562,39 @@ function Dashboard({ clients, loading, onSelectClient, onRefresh }) {
         </div>
       )}
 
+      {/* Sense-Check form + export panel */}
+      {showAddSC && (
+        <AddSenseCheckForm
+          onCancel={() => setShowAddSC(false)}
+          onDone={() => { setShowAddSC(false); onRefreshSenseChecks(); }}
+        />
+      )}
+      {showExport && (
+        <ClientExportPanel
+          clients={clients}
+          senseChecks={senseChecks}
+          onClose={() => setShowExport(false)}
+          onOpenSettings={onOpenSettings}
+        />
+      )}
+
       {/* Client list */}
       {loading ? (
         <p style={{ color: C.muted, textAlign: "center", padding: 40 }}>Loading clients…</p>
-      ) : filtered.length === 0 ? (
+      ) : merged.length === 0 ? (
         <div style={{ ...gStyle.card, textAlign: "center", padding: 48, color: C.muted }}>
-          <p style={{ fontSize: 16 }}>No clients yet. Click "+ Add Client" to get started.</p>
+          <p style={{ fontSize: 16 }}>
+            {filter === "sensecheck"
+              ? 'No Sense-Check Consults yet. Click "+ Sense-Check" to add one.'
+              : 'No clients yet. Click "+ Add Client" to get started.'}
+          </p>
         </div>
       ) : (
-        filtered.map((c) => <ClientCard key={c.id} client={c} onClick={() => onSelectClient(c)} onRefresh={onRefresh} />)
+        merged.map((item) =>
+          item.kind === "sensecheck"
+            ? <SenseCheckCard key={`sc-${item.row.id}`} record={item.row} onClick={() => onSelectSenseCheck(item.row)} />
+            : <ClientCard key={item.row.id} client={item.row} onClick={() => onSelectClient(item.row)} onRefresh={onRefresh} />
+        )
       )}
     </>
   );
@@ -1857,6 +1930,7 @@ function ClientSettings({ client, onRefresh, onDelete }) {
   const [startDate, setStartDate] = useState(client.support_start_date || today());
   const [packageStartDate, setPackageStartDate] = useState(client.package_start_date || "");
   const [pkg, setPkg] = useState(client.package || "");
+  const [email, setEmail] = useState(client.email || "");
   const [extensionWeeks, setExtensionWeeks] = useState(client.extension_weeks || 0);
   const [callsUsed, setCallsUsed] = useState(client.calls_used || 0);
   const [consultBooked, setConsultBooked] = useState(client.consult_booked || false);
@@ -1898,6 +1972,8 @@ function ClientSettings({ client, onRefresh, onDelete }) {
       support_start_date: startDate,
       package: pkg || null,
       package_start_date: packageStartDate || null,
+      // only sent when changed, so saving still works before the email column exists
+      ...(email.trim() !== (client.email || "") ? { email: email.trim() || null } : {}),
       testimonial_text: testimonialText || null,
       feedback_text: feedbackText || null,
       extension_weeks: extensionWeeks,
@@ -1919,6 +1995,15 @@ function ClientSettings({ client, onRefresh, onDelete }) {
 
   return (
     <div>
+      {/* Contact email (used by the Google Sheet export) */}
+      <div style={gStyle.card}>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 4px" }}>Contact email</h3>
+        <p style={{ fontSize: 12, color: C.muted, margin: "0 0 12px" }}>
+          Optional. If this is blank, the export uses the email from their intake form.
+        </p>
+        <input style={gStyle.input} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+      </div>
+
       {/* Package Selection */}
       <div style={gStyle.card}>
         <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 16px" }}>Package</h3>
@@ -2115,6 +2200,13 @@ function CoachSettings({ onBack }) {
   const [defaultContact, setDefaultContact] = useState(DEFAULT_CONTACT_EVERY);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [sheetMsg, setSheetMsg] = useState("");
+
+  useEffect(() => {
+    supabase.from("settings").select("value").eq("key", "sheets_webhook_url").maybeSingle()
+      .then(({ data }) => { if (data?.value) setSheetUrl(data.value); });
+  }, []);
 
   const changePw = async () => {
     setError("");
@@ -2126,6 +2218,17 @@ function CoachSettings({ onBack }) {
     await supabase.from("settings").upsert({ key: "coach_password", value: newPw }, { onConflict: "key" });
     setMsg("Password changed!"); setCurrentPw(""); setNewPw(""); setConfirmPw("");
     setTimeout(() => setMsg(""), 2000);
+  };
+
+  const saveSheetUrl = async () => {
+    const url = sheetUrl.trim();
+    if (url && !/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)) {
+      setSheetMsg("That doesn't look like an Apps Script web app URL. It should start with https://script.google.com/macros/s/ and end with /exec");
+      return;
+    }
+    const { error: err } = await supabase.from("settings").upsert({ key: "sheets_webhook_url", value: url }, { onConflict: "key" });
+    setSheetMsg(err ? "Couldn't save. Please try again." : "Saved!");
+    if (!err) setTimeout(() => setSheetMsg(""), 2000);
   };
 
   return (
@@ -2149,7 +2252,854 @@ function CoachSettings({ onBack }) {
         {msg && <p style={{ color: C.success, fontSize: 13, marginBottom: 8 }}>{msg}</p>}
         <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={changePw}>Change Password</button>
       </div>
+
+      <div style={gStyle.card}>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 6px" }}>Google Sheets export</h3>
+        <p style={{ fontSize: 13, color: C.muted, margin: "0 0 14px", lineHeight: 1.6 }}>
+          Paste the web app URL from your Google Apps Script (setup steps are in the sheets-export.gs file).
+          The "Export to Sheet" button on the dashboard sends client details there.
+        </p>
+        <label style={gStyle.label}>Apps Script web app URL</label>
+        <input style={{ ...gStyle.input, marginBottom: 12 }} value={sheetUrl}
+          onChange={(e) => setSheetUrl(e.target.value)}
+          placeholder="https://script.google.com/macros/s/.../exec" />
+        {sheetMsg && <p style={{ color: sheetMsg === "Saved!" ? C.success : C.danger, fontSize: 13, marginBottom: 8 }}>{sheetMsg}</p>}
+        <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={saveSheetUrl}>Save</button>
+      </div>
     </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SLEEP SENSE-CHECK CONSULTS
+// A one-off phone call plus a written summary. These families never get an
+// app login, so they're tracked in their own table (sense_check_clients) and
+// only ever appear on the coach side.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SENSE_CHECK = { label: "Sleep Sense-Check Consult", price: "$100" };
+const SENSE_CHECK_STATUSES = [
+  { key: "booked",       label: "Call booked",    color: C.blueDark, bg: C.blueLight },
+  { key: "call_done",    label: "Call done",      color: C.terracottaDark, bg: C.goldLight },
+  { key: "summary_sent", label: "Summary sent ✓", color: C.success,  bg: C.successLight },
+];
+
+// "2026-10-10" -> "10 October 2026" (parsed as a local date, so no UTC day-shift)
+const fmtLongDate = (d) => {
+  if (!d) return "";
+  const [y, m, day] = String(d).slice(0, 10).split("-").map(Number);
+  if (!y) return "";
+  return new Date(y, m - 1, day).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" });
+};
+const fmtShortDate = (d) => {
+  if (!d) return "";
+  const [y, m, day] = String(d).slice(0, 10).split("-").map(Number);
+  if (!y) return "";
+  return new Date(y, m - 1, day).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+};
+const scFullName = (r) => [r.first_name, r.last_name].filter(Boolean).join(" ");
+
+// "Mary Anne Smith" -> { first: "Mary Anne", last: "Smith" }
+const splitName = (full) => {
+  const parts = String(full || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return { first: parts[0] || "", last: "" };
+  return { first: parts.slice(0, -1).join(" "), last: parts[parts.length - 1] };
+};
+
+// ── Dashboard card ──────────────────────────────────────────────────────────
+function SenseCheckCard({ record, onClick }) {
+  const status = SENSE_CHECK_STATUSES.find((s) => s.key === record.status) || SENSE_CHECK_STATUSES[0];
+  const childLine = [record.child_name, record.child_age].filter(Boolean).join(" · ");
+
+  return (
+    <div onClick={onClick} style={{
+      ...gStyle.card, cursor: "pointer", borderLeft: `4px solid ${C.blue}`,
+      transition: "box-shadow 0.15s",
+    }}
+      onMouseEnter={(e) => e.currentTarget.style.boxShadow = "0 4px 16px rgba(107,143,168,0.2)"}
+      onMouseLeave={(e) => e.currentTarget.style.boxShadow = "none"}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 700, fontSize: 16, color: C.dark }}>{scFullName(record)}</span>
+            <span style={gStyle.tag(C.blueDark, C.blueLight)}>{SENSE_CHECK.label}</span>
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+            {record.call_date ? `Call: ${fmtShortDate(record.call_date)}` : "Call date not set"}
+            {childLine ? ` · ${childLine}` : ""}
+          </div>
+        </div>
+        <span style={gStyle.tag(status.color, status.bg)}>{status.label}</span>
+      </div>
+
+      {record.email && (
+        <div style={{ fontSize: 12, color: C.mid, marginBottom: 6 }}>✉️ {record.email}</div>
+      )}
+      {record.sleep_issue && (
+        <div style={{
+          fontSize: 13, color: C.mid, lineHeight: 1.5,
+          display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+        }}>
+          {record.sleep_issue}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Add form (shown on the dashboard) ───────────────────────────────────────
+function AddSenseCheckForm({ onDone, onCancel }) {
+  const [f, setF] = useState({
+    first_name: "", last_name: "", email: "", child_name: "",
+    child_age: "", call_date: today(), sleep_issue: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
+
+  const save = async () => {
+    if (!f.first_name.trim()) { setError("Please add a first name."); return; }
+    setSaving(true); setError("");
+    const { error: err } = await supabase.from("sense_check_clients").insert({
+      first_name: f.first_name.trim(),
+      last_name: f.last_name.trim() || null,
+      email: f.email.trim() || null,
+      child_name: f.child_name.trim() || null,
+      child_age: f.child_age.trim() || null,
+      call_date: f.call_date || null,
+      sleep_issue: f.sleep_issue.trim() || null,
+      status: "booked",
+    });
+    setSaving(false);
+    if (err) {
+      console.error("Sense-Check save error:", err);
+      setError("Couldn't save. Has the sense_check_clients SQL migration been run in Supabase?");
+      return;
+    }
+    onDone();
+  };
+
+  return (
+    <div style={{ ...gStyle.card, borderColor: C.blue, marginBottom: 24 }}>
+      <h3 style={{ fontFamily: font.display, color: C.blueDark, margin: "0 0 4px" }}>New {SENSE_CHECK.label}</h3>
+      <p style={{ fontSize: 12, color: C.muted, margin: "0 0 16px" }}>
+        One-off call with a written summary. No app login is created for these families.
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={gStyle.label}>First name</label>
+          <input style={gStyle.input} value={f.first_name} onChange={set("first_name")} />
+        </div>
+        <div>
+          <label style={gStyle.label}>Last name</label>
+          <input style={gStyle.input} value={f.last_name} onChange={set("last_name")} />
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={gStyle.label}>Email</label>
+          <input style={gStyle.input} type="email" value={f.email} onChange={set("email")} placeholder="name@example.com" />
+        </div>
+        <div>
+          <label style={gStyle.label}>Child's name</label>
+          <input style={gStyle.input} value={f.child_name} onChange={set("child_name")} />
+        </div>
+        <div>
+          <label style={gStyle.label}>Child's age</label>
+          <input style={gStyle.input} value={f.child_age} onChange={set("child_age")} placeholder="e.g. 14 months" />
+        </div>
+        <div>
+          <label style={gStyle.label}>Date of call</label>
+          <input style={gStyle.input} type="date" value={f.call_date} onChange={set("call_date")} />
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={gStyle.label}>Summary of their sleep issue</label>
+          <textarea style={{ ...gStyle.input, minHeight: 90, resize: "vertical", lineHeight: 1.6 }}
+            value={f.sleep_issue} onChange={set("sleep_issue")}
+            placeholder="What the family wants help with…" />
+        </div>
+      </div>
+      {error && <p style={{ color: C.danger, fontSize: 13, marginBottom: 10 }}>{error}</p>}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={save} disabled={saving}>
+          {saving ? "Saving…" : "Add Sense-Check"}
+        </button>
+        <button style={gStyle.btnSecondary} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Detail view (coach) ─────────────────────────────────────────────────────
+function SenseCheckDetail({ record, onBack, onRefresh }) {
+  const [tab, setTab] = useState("details");
+  const [data, setData] = useState(record);
+
+  const refresh = async () => {
+    const { data: d } = await supabase.from("sense_check_clients").select("*").eq("id", record.id).maybeSingle();
+    if (d) setData(d);
+    onRefresh();
+  };
+
+  const tabs = [
+    { key: "details", label: "Details" },
+    { key: "summary", label: "📄 Call Summary" },
+  ];
+
+  return (
+    <>
+      <button onClick={onBack} className="no-print" style={{ ...gStyle.btnSecondary, marginBottom: 20 }}>← All Clients</button>
+
+      <div className="no-print" style={{ marginBottom: 24 }}>
+        <h1 style={{ fontFamily: font.display, fontSize: 26, color: C.terracotta, margin: "0 0 6px" }}>{scFullName(data)}</h1>
+        <span style={gStyle.tag(C.blueDark, C.blueLight)}>{SENSE_CHECK.label}</span>
+      </div>
+
+      <div className="no-print" style={{ display: "flex", gap: 4, marginBottom: 24, overflowX: "auto", paddingBottom: 4 }}>
+        {tabs.map((t) => (
+          <button key={t.key} onClick={() => setTab(t.key)} style={{
+            padding: "8px 16px", borderRadius: 8, border: "none", cursor: "pointer",
+            fontFamily: font.body, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
+            background: tab === t.key ? C.terracotta : C.terracottaLight,
+            color: tab === t.key ? C.white : C.terracottaDark,
+          }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "details" && <SenseCheckDetails record={data} onSaved={refresh} onDeleted={onBack} />}
+      {tab === "summary" && (
+        <SenseCheckSummary
+          record={data}
+          onSaved={(patch) => setData((prev) => ({ ...prev, ...patch }))}
+        />
+      )}
+    </>
+  );
+}
+
+function SenseCheckDetails({ record, onSaved, onDeleted }) {
+  const [f, setF] = useState({
+    first_name: record.first_name || "",
+    last_name: record.last_name || "",
+    email: record.email || "",
+    child_name: record.child_name || "",
+    child_age: record.child_age || "",
+    call_date: record.call_date || "",
+    sleep_issue: record.sleep_issue || "",
+    status: record.status || "booked",
+  });
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
+
+  const save = async () => {
+    if (!f.first_name.trim()) { setMsg("Please add a first name."); return; }
+    setSaving(true);
+    const { error } = await supabase.from("sense_check_clients").update({
+      first_name: f.first_name.trim(),
+      last_name: f.last_name.trim() || null,
+      email: f.email.trim() || null,
+      child_name: f.child_name.trim() || null,
+      child_age: f.child_age.trim() || null,
+      call_date: f.call_date || null,
+      sleep_issue: f.sleep_issue.trim() || null,
+      status: f.status,
+    }).eq("id", record.id);
+    setSaving(false);
+    setMsg(error ? "Couldn't save. Please try again." : "Saved!");
+    if (!error) { setTimeout(() => setMsg(""), 2000); onSaved(); }
+  };
+
+  const deleteRecord = async () => {
+    await supabase.from("sense_check_clients").delete().eq("id", record.id);
+    onDeleted();
+  };
+
+  return (
+    <div>
+      <div style={gStyle.card}>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 16px" }}>Client details</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+          <div>
+            <label style={gStyle.label}>First name</label>
+            <input style={gStyle.input} value={f.first_name} onChange={set("first_name")} />
+          </div>
+          <div>
+            <label style={gStyle.label}>Last name</label>
+            <input style={gStyle.input} value={f.last_name} onChange={set("last_name")} />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={gStyle.label}>Email</label>
+            <input style={gStyle.input} type="email" value={f.email} onChange={set("email")} />
+          </div>
+          <div>
+            <label style={gStyle.label}>Child's name</label>
+            <input style={gStyle.input} value={f.child_name} onChange={set("child_name")} />
+          </div>
+          <div>
+            <label style={gStyle.label}>Child's age</label>
+            <input style={gStyle.input} value={f.child_age} onChange={set("child_age")} placeholder="e.g. 14 months" />
+          </div>
+          <div>
+            <label style={gStyle.label}>Date of call</label>
+            <input style={gStyle.input} type="date" value={f.call_date} onChange={set("call_date")} />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={gStyle.label}>Summary of their sleep issue</label>
+            <textarea style={{ ...gStyle.input, minHeight: 120, resize: "vertical", lineHeight: 1.6 }}
+              value={f.sleep_issue} onChange={set("sleep_issue")} />
+          </div>
+        </div>
+
+        <label style={gStyle.label}>Status</label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
+          {SENSE_CHECK_STATUSES.map((s) => (
+            <button key={s.key} onClick={() => setF((p) => ({ ...p, status: s.key }))} style={{
+              padding: "8px 14px", borderRadius: 8, border: "none", cursor: "pointer",
+              fontFamily: font.body, fontSize: 13, fontWeight: 600,
+              background: f.status === s.key ? C.terracotta : C.terracottaLight,
+              color: f.status === s.key ? C.white : C.terracottaDark,
+            }}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={save} disabled={saving}>
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+          {msg && <span style={{ fontSize: 13, color: msg === "Saved!" ? C.success : C.danger }}>{msg}</span>}
+        </div>
+      </div>
+
+      <div style={gStyle.card}>
+        <h3 style={{ fontFamily: font.display, color: C.danger, margin: "0 0 8px" }}>Delete this record</h3>
+        {!confirmDelete ? (
+          <button style={gStyle.btnDanger} onClick={() => setConfirmDelete(true)}>Delete Sense-Check</button>
+        ) : (
+          <div>
+            <p style={{ fontSize: 13, color: C.dark, marginBottom: 10 }}>
+              This permanently deletes the record and its written summary. Are you sure?
+            </p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={{ ...gStyle.btnPrimary, width: "auto", background: C.danger }} onClick={deleteRecord}>Yes, delete</button>
+              <button style={gStyle.btnSecondary} onClick={() => setConfirmDelete(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Call summary: editor + print-ready document ─────────────────────────────
+// Mirrors the Sleep Plan pattern: an on-screen editor (auto-saves) plus a
+// print-only document, so "Print / Save PDF" gives a clean branded PDF.
+// Layout and wording follow the Sleep Sense-Check Summary template.
+const SC_PRINT_CSS = `
+  @page { margin: 10mm; }
+  .sc-doc { font-family: 'DM Sans', system-ui, sans-serif; color: #2C2420; font-size: 14.5px; line-height: 1.65; }
+  .sc-doc .sc-header { text-align: center; margin-bottom: 8px; }
+  .sc-doc .sc-header img { width: 190px; height: auto; margin-bottom: 4px; }
+  .sc-doc .sc-title { text-align: center; font-family: 'Playfair Display', Georgia, serif; font-weight: 700; font-size: 26px; color: #4A6274; margin: 18px 0 2px; }
+  .sc-doc .sc-subtitle { text-align: center; color: #8A8580; font-size: 12.5px; margin: 0 0 18px; }
+  .sc-doc .sc-divider { border: none; border-top: 2.5px solid #FFD056; margin: 0 0 30px; }
+  .sc-doc h2 { font-family: 'Playfair Display', Georgia, serif; font-weight: 700; font-size: 18px; color: #C4714A; margin: 30px 0 10px; break-after: avoid-page; page-break-after: avoid; }
+  .sc-doc .sc-first { margin-top: 0; }
+  .sc-doc p { margin: 0 0 8px; white-space: pre-wrap; }
+  .sc-doc ul { margin: 6px 0 8px; padding-left: 20px; }
+  .sc-doc li { margin-bottom: 4px; white-space: pre-wrap; }
+  .sc-doc .sc-credit { background: #FCEFE2; border: 1.5px solid #FFD056; border-radius: 8px; padding: 20px 24px; margin: 28px 0; break-inside: avoid; page-break-inside: avoid; }
+  .sc-doc .sc-credit h2 { margin-top: 0; margin-bottom: 8px; }
+  .sc-doc .sc-credit p { margin-bottom: 0; white-space: normal; }
+  .sc-doc .sc-footer { margin-top: 44px; padding-top: 22px; border-top: 1px solid #EFE7DC; text-align: center; break-inside: avoid; page-break-inside: avoid; }
+  .sc-doc .sc-thanks { font-family: 'Playfair Display', Georgia, serif; font-weight: 600; font-size: 15px; color: #4A6274; margin-bottom: 10px; }
+  .sc-doc .sc-links { font-size: 13px; color: #C4714A; }
+  .sc-doc .sc-links a { color: #C4714A; text-decoration: none; font-weight: 500; }
+  .sc-doc .sc-sep { color: #8A8580; margin: 0 8px; }
+  .sc-doc .sc-tagline { margin-top: 12px; font-size: 11.5px; color: #8A8580; }
+  .sc-paper { background: #fff; border: 1px solid ${C.border}; border-radius: 12px; padding: 32px 40px; max-width: 760px; margin: 0 auto 24px; }
+  @media print {
+    .no-print { display: none !important; }
+    .print-only { display: block !important; }
+    body { background: white !important; }
+    button { display: none !important; }
+    .sc-paper { border: none; border-radius: 0; padding: 0; margin: 0; max-width: none; }
+    .sc-doc, .sc-doc * {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      color-adjust: exact !important;
+    }
+  }
+`;
+
+function SenseCheckDocument({ record, doc }) {
+  const child = (record.child_name || "").trim();
+  const suggestions = (doc.sum_suggestions || []).filter((s) => s && s.trim());
+  const has = (v) => v && v.trim();
+  const redeem = doc.credit_redeem_by ? fmtLongDate(doc.credit_redeem_by) : "";
+  let firstDone = false;
+  const cls = () => { if (firstDone) return undefined; firstDone = true; return "sc-first"; };
+
+  return (
+    <div className="sc-doc">
+      <div className="sc-header">
+        <img src={LOGO_URL} alt="Signs for Sleep" />
+      </div>
+      <div className="sc-title">Sleep Sense-Check Summary{child ? ` for ${child}` : ""}</div>
+      {doc.summary_date && <div className="sc-subtitle">Shared {fmtLongDate(doc.summary_date)}</div>}
+      <hr className="sc-divider" />
+
+      {has(doc.sum_call) && (<><h2 className={cls()}>Call Summary</h2><p>{doc.sum_call}</p></>)}
+      {has(doc.sum_going_on) && (<><h2 className={cls()}>What's Likely Going On</h2><p>{doc.sum_going_on}</p></>)}
+      {suggestions.length > 0 && (
+        <>
+          <h2 className={cls()}>What I'd Suggest Trying</h2>
+          <ul>{suggestions.map((s, i) => <li key={i}>{s}</li>)}</ul>
+        </>
+      )}
+      {has(doc.sum_expect) && (<><h2 className={cls()}>What to Expect</h2><p>{doc.sum_expect}</p></>)}
+
+      {doc.include_credit && (
+        <div className="sc-credit">
+          <h2>Your Sleep Sense-Check Credit</h2>
+          <p>
+            As a thank-you for booking your Sleep Sense-Check, the full {SENSE_CHECK.price} you've paid today can be
+            credited toward <strong>Gentle Start</strong> or <strong>Foundations of Sleep</strong>
+            {redeem ? <> if you book by <strong>{redeem}</strong></> : null}.
+            {" "}Just let me know when you're ready and I'll apply it for you.
+          </p>
+        </div>
+      )}
+
+      <div className="sc-footer">
+        <div className="sc-thanks">Thank you for trusting me with your family's sleep 🧡</div>
+        <div className="sc-links">
+          <a href="https://signsforsleep.com">signsforsleep.com</a>
+          <span className="sc-sep">&bull;</span>
+          <a href="https://instagram.com/signsforsleep">@signsforsleep</a>
+          <span className="sc-sep">&bull;</span>
+          <a href="https://www.facebook.com/profile.php?id=61589863820750">Facebook</a>
+        </div>
+        <div className="sc-tagline">Signs for Sleep &mdash; Supporting sleep through connection and communication</div>
+      </div>
+    </div>
+  );
+}
+
+function SenseCheckSummary({ record, onSaved }) {
+  const [doc, setDoc] = useState(() => ({
+    summary_date: record.summary_date || today(),
+    sum_call: record.sum_call || "",
+    sum_going_on: record.sum_going_on || "",
+    sum_suggestions: Array.isArray(record.sum_suggestions) && record.sum_suggestions.length
+      ? record.sum_suggestions : ["", "", ""],
+    sum_expect: record.sum_expect || "",
+    include_credit: record.include_credit !== false,
+    credit_redeem_by: record.credit_redeem_by || "",
+  }));
+  const [preview, setPreview] = useState(false);
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
+  const [iosHelpOpen, setIosHelpOpen] = useState(false);
+  const docRef = useRef(doc);
+  const timerRef = useRef(null);
+  const dirtyRef = useRef(false);
+  const persistRef = useRef(() => {});
+
+  const persist = useCallback(async () => {
+    const d = docRef.current;
+    dirtyRef.current = false;
+    setSaveState("saving");
+    const payload = {
+      summary_date: d.summary_date || null,
+      sum_call: d.sum_call,
+      sum_going_on: d.sum_going_on,
+      sum_suggestions: d.sum_suggestions,
+      sum_expect: d.sum_expect,
+      include_credit: d.include_credit,
+      credit_redeem_by: d.credit_redeem_by || null,
+    };
+    const { error } = await supabase.from("sense_check_clients").update(payload).eq("id", record.id);
+    if (error) {
+      console.error("Sense-Check summary save error:", error);
+      dirtyRef.current = true;
+      setSaveState("error");
+      return;
+    }
+    onSaved(payload);
+    setSaveState("saved");
+    setTimeout(() => setSaveState((s) => (s === "saved" ? "idle" : s)), 2000);
+  }, [record.id, onSaved]);
+  persistRef.current = persist;
+
+  const update = (patch) => {
+    const next = { ...docRef.current, ...patch };
+    docRef.current = next;
+    setDoc(next);
+    dirtyRef.current = true;
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => persistRef.current(), 1500);
+  };
+
+  // Save anything still pending if the coach switches tab / leaves the screen.
+  // (Uses a ref so this only runs on unmount, not on every re-render.)
+  useEffect(() => () => {
+    clearTimeout(timerRef.current);
+    if (dirtyRef.current) persistRef.current();
+  }, []);
+
+  const setSuggestion = (i, v) => update({ sum_suggestions: doc.sum_suggestions.map((s, idx) => (idx === i ? v : s)) });
+  const addSuggestion = () => update({ sum_suggestions: [...doc.sum_suggestions, ""] });
+  const removeSuggestion = (i) => update({ sum_suggestions: doc.sum_suggestions.filter((_, idx) => idx !== i) });
+
+  const child = (record.child_name || "").trim();
+  const mailto = record.email
+    ? `mailto:${record.email}?subject=${encodeURIComponent(`Your Sleep Sense-Check summary${child ? ` for ${child}` : ""}`)}&body=${encodeURIComponent(
+        `Hi ${record.first_name},\n\nThank you for your Sleep Sense-Check call. Your written summary is attached.\n\nIf you have any questions as you read through it, just reply to this email.\n\nWarmly,\nChloé`
+      )}`
+    : null;
+
+  const taStyle = { ...gStyle.input, minHeight: 110, resize: "vertical", lineHeight: 1.7 };
+  const h3Style = { fontFamily: font.display, color: C.terracotta, margin: "0 0 4px", fontSize: 16 };
+  const hintStyle = { fontSize: 11, color: C.muted, margin: "0 0 8px" };
+  const saveLabel = saveState === "saving" ? "Saving…" : saveState === "saved" ? "✓ Saved"
+    : saveState === "error" ? "⚠ Couldn't save. Check your connection" : "Auto-saves as you type";
+
+  return (
+    <div>
+      <style>{SC_PRINT_CSS}</style>
+
+      {/* Toolbar */}
+      <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ fontFamily: font.display, fontSize: 22, color: C.terracotta, margin: 0 }}>
+            {child ? `Sense-Check Summary for ${child}` : "Sense-Check Summary"}
+          </h2>
+          <p style={{ fontSize: 12, color: saveState === "error" ? C.danger : C.muted, marginTop: 4 }}>{saveLabel}</p>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button style={gStyle.btnSecondary} onClick={() => setPreview((p) => !p)}>
+            {preview ? "✏️ Back to editing" : "👁 Preview"}
+          </button>
+          {mailto && <a href={mailto} style={{ ...gStyle.btnSecondary, textDecoration: "none", display: "inline-block" }}>✉️ Email client</a>}
+          <button style={gStyle.btnGold} onClick={() => printOrGuide(setIosHelpOpen)}>🖨 Print / Save PDF</button>
+        </div>
+      </div>
+
+      {/* Editor */}
+      <div className="no-print" style={{ display: preview ? "none" : "block" }}>
+        <div style={gStyle.card}>
+          <h3 style={h3Style}>Date shared</h3>
+          <p style={hintStyle}>Shown under the title on the summary.</p>
+          <input type="date" style={{ ...gStyle.input, maxWidth: 220 }} value={doc.summary_date}
+            onChange={(e) => update({ summary_date: e.target.value })} />
+        </div>
+
+        <div style={gStyle.card}>
+          <h3 style={h3Style}>Call Summary</h3>
+          <p style={hintStyle}>2–3 sentences recapping the question or challenge the family brought, and the key details about their child's sleep right now.</p>
+          <textarea style={taStyle} value={doc.sum_call} onChange={(e) => update({ sum_call: e.target.value })} />
+        </div>
+
+        <div style={gStyle.card}>
+          <h3 style={h3Style}>What's Likely Going On</h3>
+          <p style={hintStyle}>Your read on what's driving things: developmental, environmental, habit-based, or a mix. Keep it to the one or two things most relevant to this family.</p>
+          <textarea style={taStyle} value={doc.sum_going_on} onChange={(e) => update({ sum_going_on: e.target.value })} />
+        </div>
+
+        <div style={gStyle.card}>
+          <h3 style={h3Style}>What I'd Suggest Trying</h3>
+          <p style={hintStyle}>One suggestion per box. Specific and actionable. Empty boxes are left out.</p>
+          {doc.sum_suggestions.map((s, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8 }}>
+              <textarea style={{ ...gStyle.input, minHeight: 60, resize: "vertical", lineHeight: 1.6 }}
+                value={s} onChange={(e) => setSuggestion(i, e.target.value)}
+                placeholder={`Suggestion ${i + 1}`} />
+              {doc.sum_suggestions.length > 1 && (
+                <button onClick={() => removeSuggestion(i)} aria-label="Remove suggestion"
+                  style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20, padding: "6px 4px" }}>×</button>
+              )}
+            </div>
+          ))}
+          <button style={{ ...gStyle.btnSecondary, width: "100%", borderStyle: "dashed" }} onClick={addSuggestion}>+ Add suggestion</button>
+        </div>
+
+        <div style={gStyle.card}>
+          <h3 style={h3Style}>What to Expect</h3>
+          <p style={hintStyle}>A short, honest note on realistic timelines, or what progress might look like, so the family isn't expecting an overnight fix.</p>
+          <textarea style={taStyle} value={doc.sum_expect} onChange={(e) => update({ sum_expect: e.target.value })} />
+        </div>
+
+        <div style={gStyle.card}>
+          <h3 style={h3Style}>Sense-Check credit</h3>
+          <p style={hintStyle}>The {SENSE_CHECK.price} credit box towards Gentle Start or Foundations of Sleep.</p>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+            <input type="checkbox" id="scCredit" checked={doc.include_credit}
+              onChange={(e) => update({ include_credit: e.target.checked })}
+              style={{ accentColor: C.terracotta, width: 16, height: 16 }} />
+            <label htmlFor="scCredit" style={{ fontSize: 13, color: C.dark, cursor: "pointer" }}>Include credit box</label>
+          </div>
+          {doc.include_credit && (
+            <>
+              <label style={gStyle.label}>Redeem by</label>
+              <input type="date" style={{ ...gStyle.input, maxWidth: 220 }} value={doc.credit_redeem_by}
+                onChange={(e) => update({ credit_redeem_by: e.target.value })} />
+              {!doc.credit_redeem_by && (
+                <p style={{ fontSize: 12, color: C.warning, marginTop: 8 }}>
+                  No redeem-by date set, so the "if you book by…" part is left out of the credit note.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Document: always printed; also shown on screen in Preview */}
+      <div className="print-only" style={{ display: preview ? "block" : "none" }}>
+        <div className="sc-paper">
+          <SenseCheckDocument record={record} doc={doc} />
+        </div>
+      </div>
+
+      <IosPrintHelpModal open={iosHelpOpen} onClose={() => setIosHelpOpen(false)} />
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXPORT TO GOOGLE SHEET
+// Pulls every client (app clients + Sense-Check Consults) for a chosen period
+// and sends first name, last name, email, package and onboarding date to a
+// Google Apps Script web app, which writes them to a "Client Export" tab.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Australian financial year: 1 July – 30 June. Returns the year it starts in.
+const fyStartOf = (dateStr) => {
+  const [y, m] = String(dateStr).split("-").map(Number);
+  return m >= 7 ? y : y - 1;
+};
+
+function ClientExportPanel({ clients, senseChecks, onClose, onOpenSettings }) {
+  const [mode, setMode] = useState("all"); // all | fy | month | custom
+  const [fy, setFy] = useState(fyStartOf(today()));
+  const [month, setMonth] = useState(today().slice(0, 7));
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [intakeEmails, setIntakeEmails] = useState({});
+  const [webhook, setWebhook] = useState(undefined); // undefined = still loading
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    // Most app clients only have an email on their intake form, so pull those in too
+    supabase.from("intake_responses").select("client_id, parent_email").then(({ data }) => {
+      const map = {};
+      (data || []).forEach((r) => { if (r.parent_email) map[r.client_id] = r.parent_email; });
+      setIntakeEmails(map);
+    });
+    supabase.from("settings").select("value").eq("key", "sheets_webhook_url").maybeSingle()
+      .then(({ data }) => setWebhook(data?.value || ""));
+  }, []);
+
+  const allRows = [
+    ...clients.map((c) => {
+      const { first, last } = splitName(c.name);
+      return {
+        first, last,
+        email: c.email || intakeEmails[c.id] || "",
+        pkg: c.package && PACKAGES[c.package] ? PACKAGES[c.package].label : "No package recorded",
+        date: c.support_start_date || String(c.created_at || "").slice(0, 10),
+      };
+    }),
+    ...senseChecks.map((s) => ({
+      first: s.first_name || "", last: s.last_name || "",
+      email: s.email || "",
+      pkg: SENSE_CHECK.label,
+      date: s.call_date || String(s.created_at || "").slice(0, 10),
+    })),
+  ].filter((r) => r.date).sort((a, b) => a.date.localeCompare(b.date));
+
+  const inRange = (d) => {
+    if (mode === "all") return true;
+    if (mode === "fy") return d >= `${fy}-07-01` && d <= `${fy + 1}-06-30`;
+    if (mode === "month") return d.slice(0, 7) === month;
+    return (!from || d >= from) && (!to || d <= to);
+  };
+  const rows = allRows.filter((r) => inRange(r.date));
+
+  const firstFy = allRows.length ? fyStartOf(allRows[0].date) : fyStartOf(today());
+  const fyOptions = [];
+  for (let y = fyStartOf(today()); y >= Math.min(firstFy, fyStartOf(today())); y--) fyOptions.push(y);
+
+  const rangeLabel =
+    mode === "all" ? "All clients"
+    : mode === "fy" ? `FY ${fy}–${String(fy + 1).slice(2)}`
+    : mode === "month" ? (() => {
+        const [y, m] = month.split("-").map(Number);
+        return y ? new Date(y, m - 1, 1).toLocaleDateString("en-AU", { month: "long", year: "numeric" }) : "Month";
+      })()
+    : `${from ? fmtShortDate(from) : "Start"} to ${to ? fmtShortDate(to) : "today"}`;
+
+  const header = ["First name", "Last name", "Email", "Package", "Onboarded"];
+  const tableRows = rows.map((r) => [r.first, r.last, r.email, r.pkg, r.date]);
+
+  const sendToSheet = async () => {
+    setBusy(true); setResult(null);
+    const opts = {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" }, // plain text keeps this a "simple" request, so no CORS preflight
+      body: JSON.stringify({
+        sheetName: "Client Export",
+        range: rangeLabel,
+        exportedAt: new Date().toISOString(),
+        header,
+        rows: tableRows,
+      }),
+    };
+    let confirmed = null;
+    try {
+      const res = await fetch(webhook, opts);
+      confirmed = await res.json();
+    } catch (e) {
+      confirmed = null;
+    }
+    if (confirmed) {
+      setResult(confirmed.ok
+        ? { ok: true, msg: `✓ Sent ${confirmed.rows} client${confirmed.rows === 1 ? "" : "s"} to the "Client Export" tab.` }
+        : { ok: false, msg: `Google said: ${confirmed.error || "something went wrong"}` });
+    } else {
+      // Browser couldn't read Google's reply. Re-send fire-and-forget; the script
+      // overwrites the tab each time, so sending twice can't create duplicates.
+      try {
+        await fetch(webhook, { ...opts, mode: "no-cors" });
+        setResult({ ok: true, msg: "Sent. Google didn't send back a confirmation, so please check the \"Client Export\" tab to be sure." });
+      } catch (e) {
+        setResult({ ok: false, msg: "Couldn't reach your Google Sheet script. Check the URL in Settings." });
+      }
+    }
+    setBusy(false);
+  };
+
+  const downloadCsv = () => {
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = [header, ...tableRows].map((r) => r.map(esc).join(",")).join("\r\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `signs-for-sleep-clients-${rangeLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const modes = [["all", "All"], ["fy", "Financial year"], ["month", "Month"], ["custom", "Custom range"]];
+  const noEmail = rows.filter((r) => !r.email).length;
+
+  return (
+    <div style={{ ...gStyle.card, borderColor: C.gold, marginBottom: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: 0 }}>Export clients to Google Sheet</h3>
+        <button onClick={onClose} aria-label="Close"
+          style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 20 }}>×</button>
+      </div>
+
+      <label style={gStyle.label}>Which clients?</label>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        {modes.map(([k, label]) => (
+          <button key={k} onClick={() => { setMode(k); setResult(null); }} style={{
+            padding: "6px 16px", borderRadius: 20, border: "none", cursor: "pointer",
+            fontFamily: font.body, fontSize: 13, fontWeight: 600,
+            background: mode === k ? C.terracotta : C.terracottaLight,
+            color: mode === k ? C.white : C.terracottaDark,
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {mode === "fy" && (
+        <div style={{ marginBottom: 14 }}>
+          <select style={{ ...gStyle.input, maxWidth: 320 }} value={fy} onChange={(e) => setFy(Number(e.target.value))}>
+            {fyOptions.map((y) => (
+              <option key={y} value={y}>FY {y}–{String(y + 1).slice(2)} (1 Jul {y} – 30 Jun {y + 1})</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {mode === "month" && (
+        <div style={{ marginBottom: 14 }}>
+          <input type="month" style={{ ...gStyle.input, maxWidth: 220 }} value={month} onChange={(e) => setMonth(e.target.value)} />
+        </div>
+      )}
+      {mode === "custom" && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+          <div>
+            <label style={gStyle.label}>From</label>
+            <input type="date" style={{ ...gStyle.input, maxWidth: 200 }} value={from} onChange={(e) => setFrom(e.target.value)} />
+          </div>
+          <div>
+            <label style={gStyle.label}>To</label>
+            <input type="date" style={{ ...gStyle.input, maxWidth: 200 }} value={to} onChange={(e) => setTo(e.target.value)} />
+          </div>
+        </div>
+      )}
+
+      <p style={{ fontSize: 13, color: C.dark, margin: "0 0 8px" }}>
+        <strong>{rows.length}</strong> client{rows.length === 1 ? "" : "s"} · {rangeLabel}
+        {noEmail > 0 && <span style={{ color: C.muted }}> · {noEmail} without an email on file</span>}
+      </p>
+
+      {rows.length > 0 && (
+        <div style={{ overflowX: "auto", marginBottom: 14, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: C.cream, textAlign: "left" }}>
+                {header.map((h) => <th key={h} style={{ padding: "6px 10px", color: C.mid, whiteSpace: "nowrap" }}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {tableRows.slice(0, 5).map((r, i) => (
+                <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
+                  {r.map((v, j) => <td key={j} style={{ padding: "6px 10px", color: C.dark, whiteSpace: "nowrap" }}>{j === 4 ? fmtShortDate(v) : v}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {rows.length > 5 && (
+            <div style={{ padding: "6px 10px", fontSize: 11, color: C.muted, borderTop: `1px solid ${C.border}` }}>
+              …and {rows.length - 5} more
+            </div>
+          )}
+        </div>
+      )}
+
+      {webhook === "" && (
+        <p style={{ fontSize: 13, color: C.mid, background: C.goldLight, borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>
+          Add your Google Sheet link first to send directly.{" "}
+          <button onClick={onOpenSettings} style={{ background: "none", border: "none", color: C.terracotta, fontWeight: 700, cursor: "pointer", padding: 0, fontFamily: font.body, fontSize: 13 }}>
+            Open Settings →
+          </button>
+        </p>
+      )}
+      {result && (
+        <p style={{ fontSize: 13, color: result.ok ? C.success : C.danger, marginBottom: 12 }}>{result.msg}</p>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button style={{ ...gStyle.btnPrimary, width: "auto", opacity: !webhook || rows.length === 0 || busy ? 0.5 : 1 }}
+          disabled={!webhook || rows.length === 0 || busy} onClick={sendToSheet}>
+          {busy ? "Sending…" : "📊 Send to Google Sheet"}
+        </button>
+        <button style={{ ...gStyle.btnSecondary, opacity: rows.length === 0 ? 0.5 : 1 }}
+          disabled={rows.length === 0} onClick={downloadCsv}>
+          Download CSV
+        </button>
+      </div>
+      <p style={{ fontSize: 11, color: C.muted, marginTop: 10 }}>
+        Each export replaces the contents of the "Client Export" tab, so re-sending never creates duplicates.
+      </p>
+    </div>
   );
 }
 
