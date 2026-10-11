@@ -2344,6 +2344,9 @@ function SenseCheckCard({ record, onClick }) {
           {record.sleep_issue}
         </div>
       )}
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.terracotta, marginTop: 10 }}>
+        📄 {record.sum_call ? "Open call summary →" : "Write call summary →"}
+      </div>
     </div>
   );
 }
@@ -2374,7 +2377,8 @@ function AddSenseCheckForm({ onDone, onCancel }) {
     setSaving(false);
     if (err) {
       console.error("Sense-Check save error:", err);
-      setError("Couldn't save. Has the sense_check_clients SQL migration been run in Supabase?");
+      const detail = [err.code, err.message].filter(Boolean).join(": ");
+      setError(`Couldn't save. Supabase said: ${detail || "unknown error"}`);
       return;
     }
     onDone();
@@ -2431,7 +2435,7 @@ function AddSenseCheckForm({ onDone, onCancel }) {
 
 // ── Detail view (coach) ─────────────────────────────────────────────────────
 function SenseCheckDetail({ record, onBack, onRefresh }) {
-  const [tab, setTab] = useState("details");
+  const [tab, setTab] = useState("summary");
   const [data, setData] = useState(record);
 
   const refresh = async () => {
