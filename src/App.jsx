@@ -2491,6 +2491,7 @@ function SenseCheckDetails({ record, onSaved, onDeleted }) {
     child_age: record.child_age || "",
     call_date: record.call_date || "",
     sleep_issue: record.sleep_issue || "",
+    call_notes: record.call_notes || "",
     status: record.status || "booked",
   });
   const [saving, setSaving] = useState(false);
@@ -2509,6 +2510,7 @@ function SenseCheckDetails({ record, onSaved, onDeleted }) {
       child_age: f.child_age.trim() || null,
       call_date: f.call_date || null,
       sleep_issue: f.sleep_issue.trim() || null,
+      call_notes: f.call_notes.trim() || null,
       status: f.status,
     }).eq("id", record.id);
     setSaving(false);
@@ -2554,6 +2556,15 @@ function SenseCheckDetails({ record, onSaved, onDeleted }) {
             <label style={gStyle.label}>Summary of their sleep issue</label>
             <textarea style={{ ...gStyle.input, minHeight: 120, resize: "vertical", lineHeight: 1.6 }}
               value={f.sleep_issue} onChange={set("sleep_issue")} />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={gStyle.label}>Notes for the call</label>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>
+              Your private prep notes. These never appear on the client's written summary.
+            </div>
+            <textarea style={{ ...gStyle.input, minHeight: 140, resize: "vertical", lineHeight: 1.6 }}
+              placeholder="Questions to ask, things to listen for, ideas to raise…"
+              value={f.call_notes} onChange={set("call_notes")} />
           </div>
         </div>
 
