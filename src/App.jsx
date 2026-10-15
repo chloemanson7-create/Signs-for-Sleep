@@ -4554,6 +4554,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                 <span style={{ fontWeight: 700, fontSize: 14, color: T.mid }}>Nap {idx + 1}</span>
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {nap.start && <span style={{ fontSize: 12, color: T.muted }}>{to12hLabel(nap.start)}{nap.end ? ` – ${to12hLabel(nap.end)}` : ""}</span>}
                   {dur !== null && <span style={gStyle.tag(T.blue, T.blueLight)}>{fmtDuration(dur)}</span>}
                   {!isCoach && entry.naps.length > 1 && (
                     <button onClick={() => removeNap(idx)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 16 }}>×</button>
@@ -4565,34 +4566,15 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
                   ⏱ Wake window: {fmtDuration(ww ?? wwFromPrev)} {idx === 0 ? "since wake" : "since last nap"}
                 </p>
               )}
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ ...gStyle.label, color: T.mid }}>Nap routine started</label>
-                <TimeSelect dark={isDark} value={nap.routine_start} onChange={(v) => updateNap(idx, "routine_start", v)} disabled={isCoach} placeholder="Select time…" />
-              </div>
-              {settleMins !== null && (
-                <p style={{ fontSize: 12, color: T.gold, marginBottom: 8 }}>
-                  ⏱ Took {fmtDuration(settleMins)} to fall asleep
-                </p>
-              )}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-                <div>
-                  <label style={{ ...gStyle.label, color: T.mid }}>Start</label>
-                  <TimeSelect dark={isDark} value={nap.start} onChange={(v) => updateNap(idx, "start", v)} disabled={isCoach} placeholder="Start…" />
-                </div>
-                <div>
-                  <label style={{ ...gStyle.label, color: T.mid }}>End</label>
-                  <TimeSelect dark={isDark} value={nap.end} onChange={(v) => updateNap(idx, "end", v)} disabled={isCoach} placeholder="End…" />
-                </div>
-              </div>
               {!isCoach && (
                 <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
                   <button type="button" onClick={() => updateNap(idx, "start", getCurrentTime())}
                     style={{ ...gStyle.btnSecondary, flex: 1, padding: "8px 10px", fontSize: 12 }}>
-                    ▶ Start now
+                    ▶ Start nap now
                   </button>
                   <button type="button" onClick={() => updateNap(idx, "end", getCurrentTime())}
                     style={{ ...gStyle.btnSecondary, flex: 1, padding: "8px 10px", fontSize: 12 }}>
-                    ⏹ Stop now
+                    ⏹ Stop nap now
                   </button>
                 </div>
               )}
@@ -4625,6 +4607,30 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
                   )}
                 </div>
               )}
+              <details open={isCoach} style={{ marginTop: 4 }}>
+                <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 13, color: T.blue, padding: "8px 0", listStyle: "revert" }}>
+                  Nap Details
+                </summary>
+                <div style={{ paddingTop: 8 }}>
+                <div style={{ marginBottom: 10 }}>
+                <label style={{ ...gStyle.label, color: T.mid }}>Nap routine started</label>
+                <TimeSelect dark={isDark} value={nap.routine_start} onChange={(v) => updateNap(idx, "routine_start", v)} disabled={isCoach} placeholder="Select time…" />
+              </div>
+              {settleMins !== null && (
+                <p style={{ fontSize: 12, color: T.gold, marginBottom: 8 }}>
+                  ⏱ Took {fmtDuration(settleMins)} to fall asleep
+                </p>
+              )}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                <div>
+                  <label style={{ ...gStyle.label, color: T.mid }}>Start</label>
+                  <TimeSelect dark={isDark} value={nap.start} onChange={(v) => updateNap(idx, "start", v)} disabled={isCoach} placeholder="Start…" />
+                </div>
+                <div>
+                  <label style={{ ...gStyle.label, color: T.mid }}>End</label>
+                  <TimeSelect dark={isDark} value={nap.end} onChange={(v) => updateNap(idx, "end", v)} disabled={isCoach} placeholder="End…" />
+                </div>
+              </div>
               <div style={{ marginBottom: 10 }}>
                 <label style={{ ...gStyle.label, color: T.mid }}>How did they fall asleep?</label>
                 <SuggestField dark={isDark} value={nap.how_fell_asleep} suggestions={suggestionPools.howFellAsleep}
@@ -4649,6 +4655,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
                   placeholder="e.g. attempted to put them down earlier and it didn't work"
                   onChange={(v) => updateNap(idx, "notes", v)} disabled={isCoach} />
               </div>
+                </div>
+              </details>
             </div>
           );
         })}
