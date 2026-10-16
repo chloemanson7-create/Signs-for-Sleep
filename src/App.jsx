@@ -3383,7 +3383,15 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [syncedMsg, setSyncedMsg] = useState(false);
   const saveTimerRef = useRef(null);
+  // Two-device sync (same idea as the sleep diary): baseRef is what the
+  // database held when this screen last synced. Saves send only the answers
+  // changed on THIS device, and answers entered on the other device are pulled in.
+  const baseRef = useRef(null);
+  const busyRef = useRef(false);
+  const epochRef = useRef(0);
+  const INTAKE_SYSTEM_KEYS = ["id", "client_id", "created_at", "updated_at", "completed"];
 
   // Load existing responses on mount
   useEffect(() => {
@@ -3391,41 +3399,116 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
       .eq("client_id", clientId).maybeSingle()
       .then(({ data }) => {
         if (data) setResponses(data);
+        baseRef.current = data ? JSON.parse(JSON.stringify(data)) : {};
         setLoaded(true);
       });
   }, [clientId]);
 
+  // Pick up answers entered on another device, without disturbing this one.
+  useEffect(() => {
+    if (!loaded) return undefined;
+    let stopped = false;
+    const refresh = async () => {
+      if (stopped || busyRef.current) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      const epoch = epochRef.current;
+      const { data } = await supabase.from("intake_responses").select("*")
+        .eq("client_id", clientId).maybeSingle();
+      if (stopped || busyRef.current || epoch !== epochRef.current || !data || !baseRef.current) return;
+      const base = baseRef.current;
+      const keys = Object.keys(data).filter((k) => !INTAKE_SYSTEM_KEYS.includes(k));
+      if (!keys.some((k) => !syncEq(data[k], base[k]))) return;
+      baseRef.current = JSON.parse(JSON.stringify(data));
+      setResponses((r) => {
+        const out = { ...r };
+        keys.forEach((k) => { if (syncEq(r[k], base[k])) out[k] = data[k]; });
+        return out;
+      });
+      setSyncedMsg(true);
+      setTimeout(() => setSyncedMsg(false), 4000);
+    };
+    const id = setInterval(refresh, 20000);
+    const onVisible = () => { if (!document.hidden) refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+    };
+  }, [loaded, clientId]);
+
   // Core save function — check if row exists then insert or update
   const saveNow = async (data, markCompleted = false) => {
-    // Strip system fields
-    const { id, client_id, created_at, completed, ...fields } = data;
+    busyRef.current = true;
+    epochRef.current += 1;
+    try {
+      return await saveNowInner(data, markCompleted);
+    } finally {
+      epochRef.current += 1;
+      busyRef.current = false;
+    }
+  };
 
-    // Check if a row already exists for this client
-    const { data: existing } = await supabase
+  const saveNowInner = async (data, markCompleted) => {
+    // Strip system fields
+    const { id, client_id, created_at, updated_at, completed, ...fields } = data;
+
+    // Check if a row already exists for this client (read the whole row so we
+    // can see anything the other device has saved since this screen loaded)
+    const { data: existing, error: readErr } = await supabase
       .from("intake_responses")
-      .select("id, completed")
+      .select("*")
       .eq("client_id", clientId)
       .maybeSingle();
+    if (readErr) {
+      console.error("Intake sync read error:", readErr);
+      return false; // don't risk overwriting the latest answers blind
+    }
 
     // IMPORTANT: never downgrade completed from true to false
     // If already completed, keep it completed regardless of markCompleted param
     const completedValue = existing?.completed === true ? true : markCompleted;
 
-    const payload = { ...fields, completed: completedValue };
-
     let error;
+    let nextBase;
     if (existing?.id) {
-      ({ error } = await supabase
-        .from("intake_responses")
-        .update(payload)
-        .eq("id", existing.id));
+      // Send only the answers changed on this device
+      const base = baseRef.current || {};
+      const changed = {};
+      Object.keys(fields).forEach((k) => { if (!syncEq(fields[k], base[k])) changed[k] = fields[k]; });
+      const nothingToWrite = Object.keys(changed).length === 0 && existing.completed === completedValue;
+      if (!nothingToWrite) {
+        ({ error } = await supabase
+          .from("intake_responses")
+          .update({ ...changed, completed: completedValue })
+          .eq("id", existing.id));
+      }
+      nextBase = { ...existing, ...changed, completed: completedValue };
     } else {
       ({ error } = await supabase
         .from("intake_responses")
-        .insert({ ...payload, client_id: clientId }));
+        .insert({ ...fields, completed: completedValue, client_id: clientId }));
+      nextBase = { ...fields, completed: completedValue };
     }
-    if (error) console.error("Intake save error:", error);
-    return !error;
+    if (error) { console.error("Intake save error:", error); return false; }
+
+    // Remember what the database now holds, and pull in answers from the other
+    // device for any question that hasn't been touched on this one.
+    baseRef.current = JSON.parse(JSON.stringify(nextBase));
+    setResponses((r) => {
+      const out = { ...r };
+      let changedAny = false;
+      Object.keys(nextBase).forEach((k) => {
+        if (INTAKE_SYSTEM_KEYS.includes(k)) return;
+        if (syncEq(r[k], data[k]) && !syncEq(r[k], nextBase[k])) { out[k] = nextBase[k]; changedAny = true; }
+      });
+      return changedAny ? out : r;
+    });
+    return true;
   };
 
   // Auto-save debounced 1000ms after each field change
@@ -3580,8 +3663,8 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
           </button>
         )}
       </div>
-      <p style={{ textAlign: "center", fontSize: 12, color: savedMsg ? C.success : C.muted, marginTop: 12 }}>
-        {savedMsg ? "✓ Progress saved" : saving ? "Saving…" : "Your answers are saved automatically"}
+      <p style={{ textAlign: "center", fontSize: 12, color: (savedMsg || syncedMsg) ? C.success : C.muted, marginTop: 12 }}>
+        {savedMsg ? "✓ Progress saved" : syncedMsg ? "↻ Updated with answers from another device" : saving ? "Saving…" : "Your answers are saved automatically"}
       </p>
     </div>
   );
@@ -3680,8 +3763,132 @@ const PACKAGES = {
 };
 const EXTENSION = { label: "Extension Week", days: 7, calls: 1, price: "$175" };
 
-const emptyNap = () => ({ routine_start: "", start: "", end: "", how_fell_asleep: "", location: "", resettled: "", notes: "" });
-const emptyWaking = () => ({ woke_at: "", back_asleep_at: "" });
+// Every nap / night waking carries a small invisible id so that two devices
+// adding or editing entries on the same day can be merged item by item
+// instead of one device overwriting the other's whole list.
+const newItemId = () => Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+const emptyNap = () => ({ id: newItemId(), routine_start: "", start: "", end: "", how_fell_asleep: "", location: "", resettled: "", notes: "" });
+const emptyWaking = () => ({ id: newItemId(), woke_at: "", back_asleep_at: "" });
+// Rows saved before ids existed get stable, index-based ids (the same on every
+// device) so two devices opening the same old day agree on which item is which.
+const withItemIds = (list, prefix) => (list || []).map((x, i) => (x && x.id ? x : { ...x, id: `${prefix}${i}` }));
+
+// ── Two-device sync ─────────────────────────────────────────────────────────
+// A "3-way merge": base = what this screen last knew the database held,
+// mine = what's on this screen now, theirs = what the database holds now.
+// Anything this device changed wins; anything it didn't touch is taken from
+// the database, so the other device's entries are never wiped.
+const SYNC_SCALARS = [
+  "wake_time", "bed_time", "notes", "routine_start_time", "into_bed_time",
+  "bedtime_how_fell_asleep", "night_wakings_count", "night_wakings_notes",
+  "night_wakings_awake_mins", "night_wakings_mode", "daytime_notes",
+  "exclude_from_analysis", "total_nap_mins", "night_sleep_mins", "total_sleep_24h",
+];
+const SYNC_DERIVED = ["total_nap_mins", "night_sleep_mins", "total_sleep_24h"];
+const syncLeaf = (v) => {
+  if (v === undefined || v === null || v === "") return "";
+  if (typeof v === "number") return String(v);
+  if (typeof v === "string" && /^\d{2}:\d{2}:\d{2}$/.test(v)) return v.slice(0, 5);
+  return v;
+};
+const syncCanon = (v) => {
+  if (Array.isArray(v)) return v.map(syncCanon);
+  if (v && typeof v === "object") {
+    const o = {};
+    Object.keys(v).sort().forEach((k) => { o[k] = syncCanon(v[k]); });
+    return o;
+  }
+  return syncLeaf(v);
+};
+const syncEq = (a, b) => JSON.stringify(syncCanon(a)) === JSON.stringify(syncCanon(b));
+
+const normalizeDiaryRow = (data, withBlankNap) => ({
+  ...data,
+  naps: withItemIds(data.naps || (withBlankNap ? [emptyNap()] : []), "n"),
+  night_wakings: withItemIds(data.night_wakings || [], "w"),
+  night_wakings_mode: data.night_wakings_mode || "simple",
+  tags: data.tags || [],
+  exclude_from_analysis: data.exclude_from_analysis || false,
+});
+
+function mergeDiaryItem(base, mine, theirs) {
+  const out = { ...theirs };
+  const keys = new Set([...Object.keys(mine || {}), ...Object.keys(base || {}), ...Object.keys(theirs || {})]);
+  keys.forEach((k) => {
+    if (!syncEq(mine?.[k], base?.[k])) out[k] = mine[k];
+    else if (theirs && k in theirs) out[k] = theirs[k];
+  });
+  return out;
+}
+
+function mergeDiaryList(baseList, mineList, theirsList) {
+  const index = (l) => { const m = new Map(); (l || []).forEach((x) => { if (x && x.id) m.set(x.id, x); }); return m; };
+  const b = index(baseList), m = index(mineList);
+  const out = [];
+  const used = new Set();
+  (theirsList || []).forEach((t) => {
+    if (!t || !t.id) { out.push(t); return; }
+    used.add(t.id);
+    const mi = m.get(t.id), bi = b.get(t.id);
+    if (!mi) {
+      // I don't have it: added on the other device (keep), or I deleted it
+      // (drop it, unless the other device has edited it since — don't lose that).
+      if (!bi || !syncEq(bi, t)) out.push(t);
+    } else {
+      out.push(mergeDiaryItem(bi || {}, mi, t));
+    }
+  });
+  (mineList || []).forEach((mi) => {
+    if (!mi || !mi.id) { out.push(mi); return; }
+    if (used.has(mi.id)) return;
+    const bi = b.get(mi.id);
+    // Added here, or edited here after the other device deleted it: keep.
+    if (!bi || !syncEq(bi, mi)) out.push(mi);
+  });
+  return out;
+}
+
+function mergeDiaryTags(base, mine, theirs) {
+  const b = new Set(base || []), m = new Set(mine || []);
+  const out = (theirs || []).filter((t) => !(b.has(t) && !m.has(t)));
+  (mine || []).forEach((t) => { if (!b.has(t) && !out.includes(t)) out.push(t); });
+  return out;
+}
+
+function mergeDiaryEntries(base, mine, theirs) {
+  const out = { ...theirs };
+  SYNC_SCALARS.forEach((k) => {
+    if (!syncEq(mine[k], base[k])) out[k] = mine[k];
+    else if (k in theirs) out[k] = theirs[k];
+  });
+  out.naps = mergeDiaryList(base.naps, mine.naps, theirs.naps);
+  out.night_wakings = mergeDiaryList(base.night_wakings, mine.night_wakings, theirs.night_wakings);
+  out.tags = mergeDiaryTags(base.tags, mine.tags, theirs.tags);
+  // If the other device added a nap, put the naps back in time order
+  // (blank, not-yet-started naps stay at the end).
+  const seen = new Set([...(mine.naps || []), ...(base.naps || [])].map((n) => n && n.id));
+  if ((theirs.naps || []).some((n) => n && n.id && !seen.has(n.id))) {
+    const key = (n) => { const t = (n && n.start) || ""; return t.length === 4 ? "0" + t : t; };
+    out.naps = out.naps.map((n, i) => [n, i]).sort(([a, i], [b2, j]) => {
+      const ka = key(a), kb = key(b2);
+      if (!ka && !kb) return i - j;
+      if (!ka) return 1;
+      if (!kb) return -1;
+      return ka < kb ? -1 : ka > kb ? 1 : i - j;
+    }).map(([n]) => n);
+  }
+  return out;
+}
+
+// True when two versions of a day hold the same information.
+const diaryContentEq = (a, b, includeDerived) => {
+  const pick = (e) => {
+    const o = { naps: e.naps, night_wakings: e.night_wakings, tags: [...(e.tags || [])].sort() };
+    SYNC_SCALARS.forEach((k) => { if (includeDerived || !SYNC_DERIVED.includes(k)) o[k] = e[k]; });
+    return o;
+  };
+  return syncEq(pick(a), pick(b));
+};
 // Sums completed wake→back-asleep pairs to derive a count + total minutes awake.
 // Used when a client chooses to log each night waking individually rather than
 // entering a quick total — keeps night_wakings_count / night_wakings_awake_mins
@@ -3998,11 +4205,28 @@ function useDiaryNightMode() {
 function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode, setThemeMode }) {
   const T = isDark ? DARK_C : C;
   const [selectedDate, setSelectedDate] = useState(today());
-  const [entry, setEntry] = useState(null);
+  const [entry, setEntryState] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
+  const [syncedMsg, setSyncedMsg] = useState(false);
   const [diaryCount, setDiaryCount] = useState(0);
+  // Two-device sync: entryRef always holds the freshest on-screen day,
+  // baseRef remembers (per date) what the database held when this screen
+  // last synced, and saves run one at a time so quick taps never overlap.
+  const entryRef = useRef(null);
+  const baseRef = useRef({});
+  const dateRef = useRef(selectedDate);
+  dateRef.current = selectedDate;
+  const savingRef = useRef(false);
+  const saveEpochRef = useRef(0);          // bumps on every save so a slow refresh can't land late and show older data
+  const queuedDatesRef = useRef(new Set()); // days with a save already waiting its turn
+  const saveChainRef = useRef(Promise.resolve());
+  const setEntry = (v) => {
+    const next = typeof v === "function" ? v(entryRef.current) : v;
+    entryRef.current = next;
+    setEntryState(next);
+  };
   // Neighbouring days' bed/wake times — lets an AM/PM slip on either side of
   // a night's sleep be flagged the moment the pairing is complete, whichever
   // day that happens to be entered on.
@@ -4065,7 +4289,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
           .eq("client_id", clientId).eq("date", offsetDate(selectedDate, +1)).maybeSingle(),
       ]);
       if (!cancelled) {
-        setEntry(data ? { ...data, naps: data.naps || [emptyNap()], night_wakings: data.night_wakings || [], night_wakings_mode: data.night_wakings_mode || "simple", tags: data.tags || [], exclude_from_analysis: data.exclude_from_analysis || false } : emptyEntry());
+        const loaded = data ? normalizeDiaryRow(data, true) : emptyEntry();
+        baseRef.current[selectedDate] = JSON.parse(JSON.stringify(loaded));
+        setEntry(loaded);
         setAdjTimes({
           prevBedTime: prevDay?.bed_time ? prevDay.bed_time.slice(0, 5) : null,
           nextWakeTime: nextDay?.wake_time ? nextDay.wake_time.slice(0, 5) : null,
@@ -4077,12 +4303,95 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
     return () => { cancelled = true; };
   }, [clientId, selectedDate]);
 
-  // Direct save — called explicitly, returns a promise
-  const doSave = async (data, date) => {
-    if (!data) return;
+  // Auto-refresh: pick up entries made on another device (same login) without
+  // disturbing anything typed on this one.
+  useEffect(() => {
+    if (!clientId) return undefined;
+    let stopped = false;
+    const refresh = async () => {
+      const date = dateRef.current;
+      if (stopped || savingRef.current) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (!baseRef.current[date] || !entryRef.current) return;
+      const epoch = saveEpochRef.current;
+      const { data } = await supabase.from("sleep_diary").select("*")
+        .eq("client_id", clientId).eq("date", date).maybeSingle();
+      if (stopped || savingRef.current || epoch !== saveEpochRef.current) return;
+      if (date !== dateRef.current || !data) return;
+      const base = baseRef.current[date];
+      if (!base || !entryRef.current) return;
+      const remote = normalizeDiaryRow(data, false);
+      if (diaryContentEq(remote, base, true)) return; // nothing new from the database
+      const merged = mergeDiaryEntries(base, entryRef.current, remote);
+      const changedContent = !diaryContentEq(remote, base, false);
+      baseRef.current[date] = JSON.parse(JSON.stringify(remote));
+      if (!diaryContentEq(merged, entryRef.current, true)) setEntry(merged);
+      if (changedContent) {
+        setSyncedMsg(true);
+        setTimeout(() => setSyncedMsg(false), 4000);
+      }
+    };
+    const id = setInterval(refresh, 20000);
+    const onVisible = () => { if (!document.hidden) refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+    };
+  }, [clientId]);
+
+  // Saves run one at a time, always using the freshest on-screen copy of the
+  // day, so rapid taps can't overlap or save something out of date.
+  const doSave = (data, date) => {
+    if (!data) return Promise.resolve();
+    // A save for this day is already waiting its turn and will pick up the
+    // latest on-screen copy, so a second one would be redundant.
+    if (queuedDatesRef.current.has(date)) return saveChainRef.current;
+    queuedDatesRef.current.add(date);
+    const run = async () => {
+      queuedDatesRef.current.delete(date);
+      const mine = (date === dateRef.current && entryRef.current) ? entryRef.current : data;
+      savingRef.current = true;
+      saveEpochRef.current += 1;
+      try {
+        await saveDay(mine, date);
+      } catch (e) {
+        console.error("Diary save error:", e);
+        setSaving(false);
+      } finally {
+        saveEpochRef.current += 1;
+        savingRef.current = false;
+      }
+    };
+    saveChainRef.current = saveChainRef.current.then(run, run);
+    return saveChainRef.current;
+  };
+
+  // The actual save. Before writing, it reads the day as it now stands in the
+  // database and merges, so only what THIS device changed overwrites anything.
+  const saveDay = async (snapshot, date) => {
     setSaving(true);
 
-    // Calculate nap total from current entry
+    const { data: remoteRow, error: remoteErr } = await supabase
+      .from("sleep_diary").select("*")
+      .eq("client_id", clientId).eq("date", date).maybeSingle();
+    if (remoteErr) {
+      // Couldn't read the latest version — don't risk overwriting it blind.
+      console.error("Diary sync read error:", remoteErr);
+      setSaving(false);
+      return;
+    }
+    const syncBase = baseRef.current[date];
+    const data = (remoteRow && syncBase)
+      ? mergeDiaryEntries(syncBase, snapshot, normalizeDiaryRow(remoteRow, false))
+      : snapshot;
+
+    // Calculate nap total from the merged day
     const totalNapMins = calcNapMins(data);
 
     // ── NEW LOGIC: night_sleep and total_sleep_24h belong to the day the child went to sleep ──
@@ -4160,13 +4469,19 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
     }
 
 
-    // Step 4: Update local state so display refreshes immediately
-    setEntry(prev => prev ? {
-      ...prev,
-      total_nap_mins: totalNapMins,
-      night_sleep_mins: nightSleep,
-      total_sleep_24h: total24h,
-    } : prev);
+    // Step 4: Remember what the database now holds, and refresh the screen with
+    // the merged day (keeping anything typed while this save was running).
+    const savedForScreen = { ...data, total_nap_mins: totalNapMins, night_sleep_mins: nightSleep, total_sleep_24h: total24h };
+    baseRef.current[date] = JSON.parse(JSON.stringify({
+      ...savedForScreen,
+      night_wakings_count: wakingsCount,
+      night_wakings_awake_mins: awakeMins || null,
+    }));
+    if (date === dateRef.current) {
+      const current = entryRef.current || snapshot;
+      const refreshed = mergeDiaryEntries(snapshot, current, savedForScreen);
+      if (!diaryContentEq(refreshed, current, true)) setEntry(refreshed);
+    }
 
     setSaving(false);
     setSavedMsg(true);
@@ -4958,8 +5273,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
 
       {/* Save indicator */}
       {!isCoach && (
-        <p style={{ textAlign: "center", fontSize: 12, color: savedMsg ? T.success : T.muted }}>
-          {savedMsg ? "✓ Saved automatically" : saving ? "Saving…" : "Changes save automatically"}
+        <p style={{ textAlign: "center", fontSize: 12, color: (savedMsg || syncedMsg) ? T.success : T.muted }}>
+          {savedMsg ? "✓ Saved automatically" : syncedMsg ? "↻ Updated with changes from another device" : saving ? "Saving…" : "Changes save automatically"}
         </p>
       )}
     </div>
