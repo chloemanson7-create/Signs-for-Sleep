@@ -2631,7 +2631,8 @@ const SC_PRINT_CSS = `
   .sc-doc .sc-credit h2 { margin-top: 0; margin-bottom: 8px; }
   .sc-doc .sc-credit p { margin-bottom: 0; white-space: normal; }
   .sc-doc .sc-footer { margin-top: 44px; padding-top: 22px; border-top: 1px solid #EFE7DC; text-align: center; break-inside: avoid; page-break-inside: avoid; }
-  .sc-doc .sc-thanks { font-family: 'Playfair Display', Georgia, serif; font-weight: 600; font-size: 15px; color: #4A6274; margin-bottom: 10px; }
+  .sc-doc .sc-thanks { font-family: 'Playfair Display', Georgia, serif; font-weight: 600; font-size: 15px; color: #4A6274; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; line-height: 1.4; }
+  .sc-doc .sc-heart { display: inline-flex; align-items: center; line-height: 1; font-size: 14px; font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif; position: relative; top: 1px; }
   .sc-doc .sc-links { font-size: 13px; color: #C4714A; }
   .sc-doc .sc-links a { color: #C4714A; text-decoration: none; font-weight: 500; }
   .sc-doc .sc-sep { color: #8A8580; margin: 0 8px; }
@@ -2682,7 +2683,7 @@ function SenseCheckDocument({ record, doc }) {
         <div className="sc-credit">
           <h2>Your Sleep Sense-Check Credit</h2>
           <p>
-            As a thank-you for booking your Sleep Sense-Check, the full {SENSE_CHECK.price} you've paid today can be
+            As a thank-you for booking your Sleep Sense-Check, the full {SENSE_CHECK.price} you've paid for this consult can be
             credited toward <strong>Gentle Start</strong> or <strong>Foundations of Sleep</strong>
             {redeem ? <> if you book by <strong>{redeem}</strong></> : null}.
             {" "}Just let me know when you're ready and I'll apply it for you.
@@ -2691,7 +2692,7 @@ function SenseCheckDocument({ record, doc }) {
       )}
 
       <div className="sc-footer">
-        <div className="sc-thanks">Thank you for trusting me with your family's sleep 🧡</div>
+        <div className="sc-thanks"><span>Thank you for trusting me with your family's sleep</span><span className="sc-heart">🧡</span></div>
         <div className="sc-links">
           <a href="https://signsforsleep.com">signsforsleep.com</a>
           <span className="sc-sep">&bull;</span>
