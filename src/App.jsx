@@ -21,6 +21,10 @@ const DEFAULT_CONTACT_EVERY = 7;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// Shown in small print under the diary so it's easy to confirm which version a
+// device is actually running (installed web apps can hang on to an old one).
+const APP_BUILD = "16 Oct 2026 · two-device sync";
+
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
 // dialog, no error, nothing). It's a WebKit limitation, not something a web
@@ -3427,7 +3431,7 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
       setSyncedMsg(true);
       setTimeout(() => setSyncedMsg(false), 4000);
     };
-    const id = setInterval(refresh, 20000);
+    const id = setInterval(refresh, 10000);
     const onVisible = () => { if (!document.hidden) refresh(); };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", refresh);
@@ -4331,7 +4335,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
         setTimeout(() => setSyncedMsg(false), 4000);
       }
     };
-    const id = setInterval(refresh, 20000);
+    const id = setInterval(refresh, 10000);
     const onVisible = () => { if (!document.hidden) refresh(); };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", refresh);
@@ -4358,12 +4362,18 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
       const mine = (date === dateRef.current && entryRef.current) ? entryRef.current : data;
       savingRef.current = true;
       saveEpochRef.current += 1;
+      let timer;
       try {
-        await saveDay(mine, date);
+        // A request that hangs on a poor connection must not freeze saving or syncing
+        await Promise.race([
+          saveDay(mine, date),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("save timed out")), 30000); }),
+        ]);
       } catch (e) {
         console.error("Diary save error:", e);
         setSaving(false);
       } finally {
+        clearTimeout(timer);
         saveEpochRef.current += 1;
         savingRef.current = false;
       }
@@ -5277,6 +5287,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
           {savedMsg ? "✓ Saved automatically" : syncedMsg ? "↻ Updated with changes from another device" : saving ? "Saving…" : "Changes save automatically"}
         </p>
       )}
+      <p style={{ textAlign: "center", fontSize: 10, color: T.muted, opacity: 0.6, marginTop: 2 }}>
+        App version: {APP_BUILD}
+      </p>
     </div>
   );
 }
