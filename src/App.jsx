@@ -1073,6 +1073,8 @@ const INTAKE_SECTIONS = [
     { key: "parent_sleep_impact", label: "How is your own sleep and energy being affected right now?", type: "textarea" },
     { key: "capacity_for_change", label: "Realistically, how much time and energy do you feel you have for making changes at the moment?", type: "textarea" },
     { key: "support_network", label: "Who do you feel you can lean on for support during this process?", type: "textarea" },
+    { key: "pregnancy_birth_wellbeing", label: "If you carried and gave birth to your child, how was your pregnancy and birth experience for you, physically and emotionally? (For example, any significant anxiety, complications, or a birth that was hard to process.) Share only what you're comfortable with, or skip this if it doesn't apply.", type: "textarea" },
+    { key: "postnatal_wellbeing", label: "Since becoming a parent, have you experienced postnatal depression or anxiety, or a period of low mood or heightened worry? If so, did you get the support you needed, and are any aspects still with you today? Share only what you're comfortable with.", type: "textarea" },
     { key: "previous_approaches_feelings", label: "If you've tried other sleep approaches before, how did they feel to follow — for you, not just whether they worked?", type: "textarea" },
     { key: "non_negotiables", label: "Is there anything you know you're not willing to try, or won't work for your family, regardless of whether it 'works' (e.g. co-sleeping, waking your baby up at a set time each morning even if they're still asleep)?", type: "textarea" },
   ],
@@ -1091,7 +1093,6 @@ const INTAKE_SECTIONS = [
     fields: [
       { key: "main_concerns", label: "What are your main sleep concerns?", type: "textarea" },
       { key: "family_impact", label: "Explain how the problem/issue affects you, your child and the rest of the family.", type: "textarea" },
-      { key: "what_tried", label: "What approaches have you already tried, if any?", type: "textarea" },
       { key: "goals", label: "What does success look like for you? What are your sleep goals?", type: "textarea" },
       { key: "anything_else", label: "Is there anything else you'd like me to know before we start?", type: "textarea" },
     ],
@@ -1596,7 +1597,7 @@ function Dashboard({ clients, senseChecks = [], loading, onSelectClient, onSelec
       ) : (
         merged.map((item) =>
           item.kind === "sensecheck"
-            ? <SenseCheckCard key={`sc-${item.row.id}`} record={item.row} onClick={() => onSelectSenseCheck(item.row)} />
+            ? <SenseCheckCard key={`sc-${item.row.id}`} record={item.row} onClick={() => onSelectSenseCheck(item.row)} onRefresh={onRefreshSenseChecks} />
             : <ClientCard key={item.row.id} client={item.row} onClick={() => onSelectClient(item.row)} onRefresh={onRefresh} />
         )
       )}
@@ -1884,6 +1885,13 @@ function IntakeViewer({ clientId }) {
           ))}
         </div>
       ))}
+      {intake.what_tried && (
+        <div style={gStyle.card}>
+          <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 16px" }}>From an earlier version of the form</h3>
+          <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, marginBottom: 2 }}>What approaches have you already tried, if any?</div>
+          <div style={{ fontSize: 14, color: C.dark, whiteSpace: "pre-wrap" }}>{intake.what_tried}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2311,9 +2319,35 @@ const splitName = (full) => {
 };
 
 // ── Dashboard card ──────────────────────────────────────────────────────────
-function SenseCheckCard({ record, onClick }) {
+// Follow-up date = two weeks after the summary was shared, unless Chloé has
+// set her own date. Used to remind her to follow up and request a testimonial.
+const SENSE_CHECK_FOLLOWUP_DAYS = 14;
+const scFollowUpDate = (r) => {
+  if (r.followup_date) return String(r.followup_date).slice(0, 10);
+  if (r.summary_date) return offsetDate(String(r.summary_date).slice(0, 10), SENSE_CHECK_FOLLOWUP_DAYS);
+  return "";
+};
+
+function SenseCheckCard({ record, onClick, onRefresh }) {
   const status = SENSE_CHECK_STATUSES.find((s) => s.key === record.status) || SENSE_CHECK_STATUSES[0];
   const childLine = [record.child_name, record.child_age].filter(Boolean).join(" · ");
+  const testimonialStatus = TESTIMONIAL_STATUSES.find((s) => s.key === record.testimonial_status);
+  const followUp = scFollowUpDate(record);
+  const received = record.testimonial_status === "received";
+  const followUpDue = !!followUp && followUp <= today() && !received;
+
+  const cycleTestimonial = async (e) => {
+    e.stopPropagation(); // don't open the card
+    const keys = [null, "requested", "followed_up", "received"];
+    const next = keys[(keys.indexOf(record.testimonial_status || null) + 1) % keys.length];
+    await supabase.from("sense_check_clients").update({ testimonial_status: next }).eq("id", record.id);
+    if (onRefresh) onRefresh();
+  };
+  const changeFollowUp = async (e) => {
+    e.stopPropagation();
+    await supabase.from("sense_check_clients").update({ followup_date: e.target.value || null }).eq("id", record.id);
+    if (onRefresh) onRefresh();
+  };
 
   return (
     <div onClick={onClick} style={{
@@ -2348,8 +2382,39 @@ function SenseCheckCard({ record, onClick }) {
           {record.sleep_issue}
         </div>
       )}
-      <div style={{ fontSize: 12, fontWeight: 700, color: C.terracotta, marginTop: 10 }}>
-        📄 {record.sum_call ? "Open call summary →" : "Write call summary →"}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.terracotta }}>
+          📄 {record.sum_call ? "Open call summary →" : "Write call summary →"}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {/* Follow-up date: tap to change (a transparent date input sits over the chip) */}
+          <label
+            onClick={(e) => e.stopPropagation()}
+            title="Tap to change the follow-up date"
+            style={{
+              position: "relative", display: "inline-flex", alignItems: "center", cursor: "pointer",
+              padding: "5px 12px", borderRadius: 20, fontFamily: font.body, fontSize: 11, fontWeight: 600,
+              background: followUpDue ? C.warningLight : "#f0f0f0",
+              color: followUpDue ? C.warning : C.muted,
+            }}
+          >
+            📅 {followUp ? `${followUpDue ? "Follow up due" : "Follow up"} · ${fmtShortDate(followUp)}` : "Set follow-up date"}
+            <input type="date" value={followUp} onChange={changeFollowUp}
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" }} />
+          </label>
+          <button
+            onClick={cycleTestimonial}
+            title="Click to cycle through testimonial status"
+            style={{
+              padding: "5px 12px", borderRadius: 20, border: "none", cursor: "pointer",
+              fontFamily: font.body, fontSize: 11, fontWeight: 600,
+              background: testimonialStatus ? testimonialStatus.bg : "#f0f0f0",
+              color: testimonialStatus ? testimonialStatus.color : C.muted,
+            }}
+          >
+            ⭐ {testimonialStatus ? testimonialStatus.label : "Testimonial"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2497,6 +2562,8 @@ function SenseCheckDetails({ record, onSaved, onDeleted }) {
     sleep_issue: record.sleep_issue || "",
     call_notes: record.call_notes || "",
     status: record.status || "booked",
+    followup_date: record.followup_date ? String(record.followup_date).slice(0, 10) : "",
+    testimonial_status: record.testimonial_status || "",
   });
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
@@ -2516,6 +2583,8 @@ function SenseCheckDetails({ record, onSaved, onDeleted }) {
       sleep_issue: f.sleep_issue.trim() || null,
       call_notes: f.call_notes.trim() || null,
       status: f.status,
+      followup_date: f.followup_date || null,
+      testimonial_status: f.testimonial_status || null,
     }).eq("id", record.id);
     setSaving(false);
     setMsg(error ? "Couldn't save. Please try again." : "Saved!");
@@ -2582,6 +2651,28 @@ function SenseCheckDetails({ record, onSaved, onDeleted }) {
               color: f.status === s.key ? C.white : C.terracottaDark,
             }}>
               {s.label}
+            </button>
+          ))}
+        </div>
+
+        <label style={gStyle.label}>Follow-up date</label>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>
+          A reminder to follow up and request a testimonial. Leave blank to use two weeks after the summary was shared
+          {record.summary_date ? ` (${fmtLongDate(offsetDate(String(record.summary_date).slice(0, 10), SENSE_CHECK_FOLLOWUP_DAYS))})` : ""}.
+        </div>
+        <input type="date" style={{ ...gStyle.input, maxWidth: 220, marginBottom: 16 }}
+          value={f.followup_date} onChange={set("followup_date")} />
+
+        <label style={gStyle.label}>Testimonial</label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
+          {[{ key: "", label: "Not requested", color: C.terracottaDark, bg: C.terracottaLight }, ...TESTIMONIAL_STATUSES].map((t) => (
+            <button key={t.key || "none"} onClick={() => setF((p) => ({ ...p, testimonial_status: t.key }))} style={{
+              padding: "8px 14px", borderRadius: 8, border: "none", cursor: "pointer",
+              fontFamily: font.body, fontSize: 13, fontWeight: 600,
+              background: f.testimonial_status === t.key ? C.terracotta : C.terracottaLight,
+              color: f.testimonial_status === t.key ? C.white : C.terracottaDark,
+            }}>
+              {t.label}
             </button>
           ))}
         </div>
