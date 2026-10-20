@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "21 Oct 2026 · safer questionnaire saving";
+const APP_BUILD = "21 Oct 2026 · questionnaire saves answer-by-answer";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -3572,6 +3572,12 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const skipColsRef = useRef(new Set());              // answers the database has no column for yet
   const responsesRef = useRef({});
   const [saveError, setSaveError] = useState("");
+  const [saveDetail, setSaveDetail] = useState("");   // technical detail shown in small print, to help track down problems
+  const failDetailRef = useRef("");
+  const failKindRef = useRef("");                // "field" = the database refused a specific answer, otherwise a general/connection problem
+  const saveFailText = () => failKindRef.current === "field"
+    ? "One of your answers couldn't be saved just now, but the rest are saved. It's kept safe on this device and we'll keep trying."
+    : "We couldn't save your latest answers just now. Please check your internet connection. Your answers are still on this screen and backed up on this device, and we'll keep trying.";
   const [submitError, setSubmitError] = useState("");
   const [loadError, setLoadError] = useState(false);
   const [loadTick, setLoadTick] = useState(0);
@@ -3728,12 +3734,46 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
         break;
       }
     }
-    if (error) { console.error("Intake save error:", error); return false; }
+    failDetailRef.current = "";
+    failKindRef.current = "";
+    let rowId = existing?.id || null;
+    const rejected = {};
+    if (error && Object.keys(toWrite).length > 0) {
+      // The bulk save was rejected. Try again one answer at a time, so a single answer the
+      // database refuses can't hold back all the others (and we can say which one it is).
+      console.warn("Intake bulk save failed, retrying one answer at a time:", error);
+      if (!rowId) {
+        const made = await supabase.from("intake_responses")
+          .insert({ client_id: clientId, completed: false }).select("id").maybeSingle();
+        if (made.data && made.data.id) rowId = made.data.id;
+      }
+      if (rowId) {
+        const savedKeys = {};
+        for (const k of Object.keys(toWrite)) {
+          const one = await supabase.from("intake_responses").update({ [k]: toWrite[k] }).eq("id", rowId);
+          if (one.error) rejected[k] = one.error.message || "rejected"; else savedKeys[k] = toWrite[k];
+        }
+        if (Object.keys(rejected).length === 0) {
+          const fin = await supabase.from("intake_responses").update({ completed: completedValue }).eq("id", rowId);
+          error = fin.error || null;
+        } else {
+          // keep what DID save, so it isn't sent again
+          baseRef.current = { ...(existing || {}), ...(baseRef.current || {}), ...savedKeys, id: rowId };
+          failDetailRef.current = Object.keys(rejected).map((k) => `${k}: ${rejected[k]}`).join("; ");
+          // Connection trouble rejects everything with a network-style message; a refused answer has a database one
+          failKindRef.current = Object.values(rejected).every((m) => /fetch|network|timeout|timed out|offline|load failed/i.test(String(m))) ? "other" : "field";
+          console.error("Intake: the database rejected these answers:", rejected);
+          return false;
+        }
+        if (!error) { toWrite = { ...toWrite }; }
+      }
+    }
+    if (error) { failDetailRef.current = error.message || "save failed"; console.error("Intake save error:", error); return false; }
 
     // Remember what the database now holds, and pull in answers from the other
     // device for any question that hasn't been touched on this one.
-    const nextBase = existing?.id
-      ? { ...existing, ...toWrite, completed: completedValue }
+    const nextBase = (existing?.id || rowId)
+      ? { ...(existing || {}), ...toWrite, completed: completedValue }
       : { ...toWrite, completed: completedValue };
     baseRef.current = JSON.parse(JSON.stringify(nextBase));
     setResponses((r) => {
@@ -3758,12 +3798,13 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
       const ok = await saveNow(responses, false);
       setSaving(false);
       if (ok) {
-        setSaveError("");
+        setSaveError(""); setSaveDetail("");
         setSavedMsg(true);
         setTimeout(() => setSavedMsg(false), 2000);
       } else {
         setSavedMsg(false);
-        setSaveError("We couldn't save your latest answers just now. Please check your internet connection. Your answers are still on this screen and backed up on this device, and we'll keep trying.");
+        setSaveDetail(failDetailRef.current);
+        setSaveError(saveFailText());
       }
     }, 1000);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
@@ -3774,7 +3815,8 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
     if (!saveError) return undefined;
     const id = setInterval(async () => {
       const ok = await saveNow(responsesRef.current, false);
-      if (ok) { setSaveError(""); setSavedMsg(true); setTimeout(() => setSavedMsg(false), 2000); }
+      if (ok) { setSaveError(""); setSaveDetail(""); setSavedMsg(true); setTimeout(() => setSavedMsg(false), 2000); }
+      else setSaveDetail(failDetailRef.current);
     }, 8000);
     return () => clearInterval(id);
   }, [saveError]);
@@ -3787,7 +3829,7 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
     setSaving(true);
     const ok = await saveNow(responses, false);
     setSaving(false);
-    if (!ok) setSaveError("We couldn't save your latest answers just now. Please check your internet connection. Your answers are still on this screen and backed up on this device, and we'll keep trying.");
+    if (!ok) { setSaveDetail(failDetailRef.current); setSaveError(saveFailText()); }
     setSection(next);
     window.scrollTo(0, 0);
   };
@@ -3801,7 +3843,10 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
     const verified = ok ? await fetchIntakeRow(clientId) : null;
     if (!ok || !verified || verified.error || !verified.completed) {
       setSaving(false);
-      setSubmitError("We couldn't submit your questionnaire just now. Your answers are safe: they're still on this screen and backed up on this device. Please check your internet connection and tap Submit again.");
+      setSaveDetail(failDetailRef.current);
+      setSubmitError(failKindRef.current === "field"
+        ? "We couldn't submit your questionnaire because one of your answers couldn't be saved. Everything else is saved and this answer is kept safe on this device. Please let Chloé know so she can fix it, then tap Submit again."
+        : "We couldn't submit your questionnaire just now. Your answers are safe: they're still on this screen and backed up on this device. Please check your internet connection and tap Submit again.");
       return;
     }
     clearDraft();
@@ -3925,6 +3970,9 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
           borderRadius: 10, padding: "12px 14px", fontSize: 13, lineHeight: 1.5, marginBottom: 10,
         }}>
           ⚠️ {submitError || saveError}
+          {saveDetail && (
+            <div style={{ marginTop: 6, fontSize: 11, opacity: 0.8, wordBreak: "break-word" }}>Technical detail: {saveDetail}</div>
+          )}
         </div>
       )}
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
@@ -3944,6 +3992,7 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
       <p style={{ textAlign: "center", fontSize: 12, color: (savedMsg || syncedMsg) ? C.success : C.muted, marginTop: 12 }}>
         {savedMsg ? "✓ Progress saved" : syncedMsg ? "↻ Updated with answers from another device" : saving ? "Saving…" : "Your answers are saved automatically"}
       </p>
+      <p style={{ textAlign: "center", fontSize: 10, color: C.muted, opacity: 0.6, marginTop: 2 }}>App version: {APP_BUILD}</p>
     </div>
   );
 }
