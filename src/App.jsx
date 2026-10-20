@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "20 Oct 2026 · plan, toolbox & resource bells";
+const APP_BUILD = "21 Oct 2026 · safer questionnaire saving";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -1891,13 +1891,33 @@ function ClientOverview({ client, onRefresh }) {
   );
 }
 
+// Reads a client's intake answers. Normally there's one row per client, but if a
+// slow connection ever created two, a plain single-row read errors and the form
+// would look blank / "not submitted". This picks the most complete row and fills
+// any gaps from the others, so nothing is hidden.
+const INTAKE_SYS_KEYS = ["id", "client_id", "created_at", "updated_at", "completed"];
+const intakeAnswerEmpty = (v) => v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
+async function fetchIntakeRow(clientId) {
+  const { data, error } = await supabase.from("intake_responses").select("*").eq("client_id", clientId);
+  if (error) return { row: null, id: null, completed: false, count: 0, error };
+  const rows = data || [];
+  if (rows.length === 0) return { row: null, id: null, completed: false, count: 0, error: null };
+  const filled = (r) => Object.keys(r).filter((k) => !INTAKE_SYS_KEYS.includes(k) && !intakeAnswerEmpty(r[k])).length;
+  const ranked = [...rows].sort((a, b) => ((b.completed ? 1e6 : 0) + filled(b)) - ((a.completed ? 1e6 : 0) + filled(a)));
+  const row = { ...ranked[0] };
+  ranked.slice(1).forEach((r) => Object.keys(r).forEach((k) => {
+    if (!INTAKE_SYS_KEYS.includes(k) && intakeAnswerEmpty(row[k]) && !intakeAnswerEmpty(r[k])) row[k] = r[k];
+  }));
+  if (rows.some((r) => r.completed === true)) row.completed = true;
+  return { row, id: ranked[0].id, completed: rows.some((r) => r.completed === true), count: rows.length, error: null };
+}
+
 function IntakeViewer({ clientId }) {
   const [intake, setIntake] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.from("intake_responses").select("*").eq("client_id", clientId).maybeSingle()
-      .then(({ data }) => { setIntake(data); setLoading(false); });
+    fetchIntakeRow(clientId).then(({ row }) => { setIntake(row); setLoading(false); });
   }, [clientId]);
 
   if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
@@ -3326,10 +3346,9 @@ function ClientApp({ session, onLogout }) {
 
   useEffect(() => {
     // Load intake completion
-    supabase.from("intake_responses").select("id, completed")
-      .eq("client_id", session.clientId).maybeSingle()
-      .then(({ data }) => {
-        const done = !!(data?.completed);
+    fetchIntakeRow(session.clientId)
+      .then(({ completed }) => {
+        const done = !!completed;
         setHasIntake(done);
         if (!done) setTab("intake");
       });
@@ -3549,18 +3568,51 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const baseRef = useRef(null);
   const busyRef = useRef(false);
   const epochRef = useRef(0);
-  const INTAKE_SYSTEM_KEYS = ["id", "client_id", "created_at", "updated_at", "completed"];
+  const saveQueueRef = useRef(Promise.resolve(true)); // saves run one at a time
+  const skipColsRef = useRef(new Set());              // answers the database has no column for yet
+  const responsesRef = useRef({});
+  const [saveError, setSaveError] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [loadError, setLoadError] = useState(false);
+  const [loadTick, setLoadTick] = useState(0);
+  const INTAKE_SYSTEM_KEYS = INTAKE_SYS_KEYS;
+  responsesRef.current = responses;
+
+  // A private backup of the answers on this device. If a save ever fails (poor
+  // connection, a server hiccup) nothing typed is lost, and it's put back next time.
+  const draftKey = `sfs_intake_draft_${clientId}`;
+  const writeDraft = (r) => {
+    try {
+      const out = {};
+      Object.keys(r).forEach((k) => { if (!INTAKE_SYS_KEYS.includes(k) && !intakeAnswerEmpty(r[k])) out[k] = r[k]; });
+      localStorage.setItem(draftKey, JSON.stringify(out));
+    } catch (e) { /* storage unavailable — fine */ }
+  };
+  const clearDraft = () => { try { localStorage.removeItem(draftKey); } catch (e) { /* ignore */ } };
 
   // Load existing responses on mount
   useEffect(() => {
-    supabase.from("intake_responses").select("*")
-      .eq("client_id", clientId).maybeSingle()
-      .then(({ data }) => {
-        if (data) setResponses(data);
-        baseRef.current = data ? JSON.parse(JSON.stringify(data)) : {};
-        setLoaded(true);
-      });
-  }, [clientId]);
+    let cancelled = false;
+    setLoadError(false);
+    fetchIntakeRow(clientId).then(({ row, error }) => {
+      if (cancelled) return;
+      if (error) { setLoadError(true); return; } // never show a blank form we can't back up
+      let start = row ? { ...row } : {};
+      // Put back anything typed on this device that never made it to the database
+      try {
+        const draft = JSON.parse(localStorage.getItem(draftKey) || "null");
+        if (draft && !(row && row.completed)) {
+          Object.keys(draft).forEach((k) => {
+            if (!INTAKE_SYS_KEYS.includes(k) && intakeAnswerEmpty(start[k]) && !intakeAnswerEmpty(draft[k])) start[k] = draft[k];
+          });
+        }
+      } catch (e) { /* ignore */ }
+      if (Object.keys(start).length) setResponses(start);
+      baseRef.current = row ? JSON.parse(JSON.stringify(row)) : {};
+      setLoaded(true);
+    });
+    return () => { cancelled = true; };
+  }, [clientId, loadTick]);
 
   // Pick up answers entered on another device, without disturbing this one.
   useEffect(() => {
@@ -3570,8 +3622,7 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
       if (stopped || busyRef.current) return;
       if (typeof document !== "undefined" && document.hidden) return;
       const epoch = epochRef.current;
-      const { data } = await supabase.from("intake_responses").select("*")
-        .eq("client_id", clientId).maybeSingle();
+      const { row: data } = await fetchIntakeRow(clientId);
       if (stopped || busyRef.current || epoch !== epochRef.current || !data || !baseRef.current) return;
       const base = baseRef.current;
       const keys = Object.keys(data).filter((k) => !INTAKE_SYSTEM_KEYS.includes(k));
@@ -3599,63 +3650,91 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
     };
   }, [loaded, clientId]);
 
-  // Core save function — check if row exists then insert or update
-  const saveNow = async (data, markCompleted = false) => {
-    busyRef.current = true;
-    epochRef.current += 1;
-    try {
-      return await saveNowInner(data, markCompleted);
-    } finally {
+  // Core save function — check if row exists then insert or update.
+  // Saves are queued so two can never overlap (which could create a duplicate row),
+  // and it resolves to true/false so callers can tell whether it really saved.
+  const saveNow = (data, markCompleted = false) => {
+    const run = async () => {
+      busyRef.current = true;
       epochRef.current += 1;
-      busyRef.current = false;
-    }
+      try {
+        return await saveNowInner(data, markCompleted);
+      } catch (e) {
+        console.error("Intake save error:", e);
+        return false;
+      } finally {
+        epochRef.current += 1;
+        busyRef.current = false;
+      }
+    };
+    const p = saveQueueRef.current.then(run, run);
+    saveQueueRef.current = p;
+    return p;
+  };
+
+  // "Could not find the 'x' column…" / 'column "x" … does not exist' → "x"
+  const unknownColumnIn = (err) => {
+    const msg = (err && err.message) || "";
+    const m = msg.match(/'([^']+)' column of/) || msg.match(/column "([^"]+)"/);
+    return m ? m[1] : null;
   };
 
   const saveNowInner = async (data, markCompleted) => {
     // Strip system fields
-    const { id, client_id, created_at, updated_at, completed, ...fields } = data;
+    const { id, client_id, created_at, updated_at, completed, ...allFields } = data;
+    const fields = {};
+    Object.keys(allFields).forEach((k) => { if (!skipColsRef.current.has(k)) fields[k] = allFields[k]; });
 
     // Check if a row already exists for this client (read the whole row so we
     // can see anything the other device has saved since this screen loaded)
-    const { data: existing, error: readErr } = await supabase
-      .from("intake_responses")
-      .select("*")
-      .eq("client_id", clientId)
-      .maybeSingle();
-    if (readErr) {
-      console.error("Intake sync read error:", readErr);
+    const found = await fetchIntakeRow(clientId);
+    if (found.error) {
+      console.error("Intake sync read error:", found.error);
       return false; // don't risk overwriting the latest answers blind
     }
+    const existing = found.row ? { ...found.row, id: found.id } : null;
 
     // IMPORTANT: never downgrade completed from true to false
     // If already completed, keep it completed regardless of markCompleted param
     const completedValue = existing?.completed === true ? true : markCompleted;
 
-    let error;
-    let nextBase;
+    // Existing row: send only the answers changed on this device. New row: send everything.
+    const base = baseRef.current || {};
+    let toWrite = {};
     if (existing?.id) {
-      // Send only the answers changed on this device
-      const base = baseRef.current || {};
-      const changed = {};
-      Object.keys(fields).forEach((k) => { if (!syncEq(fields[k], base[k])) changed[k] = fields[k]; });
-      const nothingToWrite = Object.keys(changed).length === 0 && existing.completed === completedValue;
-      if (!nothingToWrite) {
-        ({ error } = await supabase
-          .from("intake_responses")
-          .update({ ...changed, completed: completedValue })
-          .eq("id", existing.id));
-      }
-      nextBase = { ...existing, ...changed, completed: completedValue };
+      Object.keys(fields).forEach((k) => { if (!syncEq(fields[k], base[k])) toWrite[k] = fields[k]; });
     } else {
-      ({ error } = await supabase
-        .from("intake_responses")
-        .insert({ ...fields, completed: completedValue, client_id: clientId }));
-      nextBase = { ...fields, completed: completedValue };
+      toWrite = { ...fields };
+    }
+    const nothingToWrite = existing?.id && Object.keys(toWrite).length === 0 && existing.completed === completedValue;
+
+    let error = null;
+    if (!nothingToWrite) {
+      // If the database is missing a column for a newer question, set that one answer aside
+      // (it stays backed up on this device) and save everything else, rather than failing it all.
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const res = existing?.id
+          ? await supabase.from("intake_responses").update({ ...toWrite, completed: completedValue }).eq("id", existing.id)
+          : await supabase.from("intake_responses").insert({ ...toWrite, completed: completedValue, client_id: clientId });
+        error = res.error;
+        if (!error) break;
+        const col = unknownColumnIn(error);
+        if (col && col in toWrite) {
+          console.warn(`Intake: database has no "${col}" column yet — saving the rest without it.`);
+          skipColsRef.current.add(col);
+          delete toWrite[col];
+          continue;
+        }
+        break;
+      }
     }
     if (error) { console.error("Intake save error:", error); return false; }
 
     // Remember what the database now holds, and pull in answers from the other
     // device for any question that hasn't been touched on this one.
+    const nextBase = existing?.id
+      ? { ...existing, ...toWrite, completed: completedValue }
+      : { ...toWrite, completed: completedValue };
     baseRef.current = JSON.parse(JSON.stringify(nextBase));
     setResponses((r) => {
       const out = { ...r };
@@ -3672,16 +3751,33 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   // Auto-save debounced 1000ms after each field change
   useEffect(() => {
     if (!loaded || Object.keys(responses).length === 0) return;
+    writeDraft(responses); // instant private backup on this device
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaving(true);
     saveTimerRef.current = setTimeout(async () => {
-      await saveNow(responses, false);
+      const ok = await saveNow(responses, false);
       setSaving(false);
-      setSavedMsg(true);
-      setTimeout(() => setSavedMsg(false), 2000);
+      if (ok) {
+        setSaveError("");
+        setSavedMsg(true);
+        setTimeout(() => setSavedMsg(false), 2000);
+      } else {
+        setSavedMsg(false);
+        setSaveError("We couldn't save your latest answers just now. Please check your internet connection. Your answers are still on this screen and backed up on this device, and we'll keep trying.");
+      }
     }, 1000);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [responses, loaded]);
+
+  // While a save is failing, keep retrying quietly until it goes through
+  useEffect(() => {
+    if (!saveError) return undefined;
+    const id = setInterval(async () => {
+      const ok = await saveNow(responsesRef.current, false);
+      if (ok) { setSaveError(""); setSavedMsg(true); setTimeout(() => setSavedMsg(false), 2000); }
+    }, 8000);
+    return () => clearInterval(id);
+  }, [saveError]);
 
   const set = (key, val) => setResponses((r) => ({ ...r, [key]: val }));
 
@@ -3689,8 +3785,9 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const goToSection = async (next) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaving(true);
-    await saveNow(responses, false);
+    const ok = await saveNow(responses, false);
     setSaving(false);
+    if (!ok) setSaveError("We couldn't save your latest answers just now. Please check your internet connection. Your answers are still on this screen and backed up on this device, and we'll keep trying.");
     setSection(next);
     window.scrollTo(0, 0);
   };
@@ -3698,7 +3795,16 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const submit = async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaving(true);
-    await saveNow(responses, true);
+    setSubmitError("");
+    const ok = await saveNow(responses, true);
+    // Only tell the client it worked if it really did: confirm the saved copy is marked complete
+    const verified = ok ? await fetchIntakeRow(clientId) : null;
+    if (!ok || !verified || verified.error || !verified.completed) {
+      setSaving(false);
+      setSubmitError("We couldn't submit your questionnaire just now. Your answers are safe: they're still on this screen and backed up on this device. Please check your internet connection and tap Submit again.");
+      return;
+    }
+    clearDraft();
     // Send email notification
     try {
       const { data: clientData } = await supabase
@@ -3729,6 +3835,12 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
   const currentSection = INTAKE_SECTIONS[section];
   const isLast = section === INTAKE_SECTIONS.length - 1;
 
+  if (loadError && !loaded) return (
+    <div style={{ ...gStyle.card, textAlign: "center", padding: 32 }}>
+      <p style={{ color: C.dark, marginBottom: 14 }}>We couldn't load your questionnaire. Please check your internet connection and try again.</p>
+      <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={() => setLoadTick((t) => t + 1)}>Try again</button>
+    </div>
+  );
   if (!loaded) return <p style={{ color: C.muted, padding: 40 }}>Loading…</p>;
 
   return (
@@ -3807,6 +3919,14 @@ function IntakeForm({ clientId, hasIntake, onComplete }) {
         </div>
       ))}
 
+      {(submitError || saveError) && (
+        <div role="alert" style={{
+          background: C.warningLight, color: C.warning, border: `1px solid ${C.warning}`,
+          borderRadius: 10, padding: "12px 14px", fontSize: 13, lineHeight: 1.5, marginBottom: 10,
+        }}>
+          ⚠️ {submitError || saveError}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         {section > 0 && (
           <button style={{ ...gStyle.btnSecondary, flex: 1 }} onClick={() => goToSection(section - 1)} disabled={saving}>Back</button>
@@ -4863,9 +4983,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
           const { data: clientRow } = await supabase
             .from("clients").select("package_start_date").eq("id", clientId).maybeSingle();
           if (!clientRow?.package_start_date) {
-            const { data: intakeRow } = await supabase
-              .from("intake_responses").select("completed").eq("client_id", clientId).maybeSingle();
-            if (intakeRow?.completed) {
+            const intakeRow = await fetchIntakeRow(clientId);
+            if (intakeRow.completed) {
               await supabase.from("clients").update({ package_start_date: today() }).eq("id", clientId);
             }
           }
