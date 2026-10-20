@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "20 Oct 2026 · plan & toolbox bells";
+const APP_BUILD = "20 Oct 2026 · plan & toolbox bells v3";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -3313,6 +3313,8 @@ function ClientApp({ session, onLogout }) {
   const [diaryCount, setDiaryCount] = useState(0);
   const [unreadNotes, refreshUnreadNotes] = useUnreadNotes(session.clientId, false);
   const updateAlerts = useClientUpdateAlerts(session.clientId);
+  // Bumping a key remounts the Sleep Plan / Toolbox so a client already on the tab can pull in a fresh version
+  const [reloadKeys, setReloadKeys] = useState({ plan: 0, toolbox: 0 });
   // Night mode lives here (not inside SleepDiaryViewer) so the header and tab
   // bar can go dark along with the diary content — the whole screen, not
   // just the diary card. It only actually applies while the Sleep Diary tab
@@ -3344,6 +3346,7 @@ function ClientApp({ session, onLogout }) {
   // Opening the Sleep Plan or Toolbox tab clears its bell
   useEffect(() => {
     if (tab === "plan" || tab === "toolbox") updateAlerts.markSeen(tab);
+    updateAlerts.refresh(); // switching tabs is a good moment to check for anything new
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -3352,10 +3355,10 @@ function ClientApp({ session, onLogout }) {
     { key: "diary", label: "📖 Sleep Diary", badge: unreadNotes },
     { key: "package", label: "🎁 Your Package" },
     { key: "analysis", label: "📊 Analysis" },
-    { key: "plan", label: "📋 Sleep Plan", update: tab !== "plan" ? updateAlerts.planKind : null },
+    { key: "plan", label: "📋 Sleep Plan", update: updateAlerts.planKind },
     { key: "progress", label: "🎉 Progress" },
     { key: "resources", label: "🎬 Resources" },
-    { key: "toolbox", label: "🧰 Toolbox", update: tab !== "toolbox" ? updateAlerts.toolboxKind : null },
+    { key: "toolbox", label: "🧰 Toolbox", update: updateAlerts.toolboxKind },
   ];
 
   // Check-in call eligibility
@@ -3404,7 +3407,15 @@ function ClientApp({ session, onLogout }) {
             gap: 2, flex: "1 1 auto", minWidth: 0,
           }}>
             {tabs.map((t) => (
-              <button key={t.key} onClick={() => setTab(t.key)} style={{
+              <button key={t.key} onClick={() => {
+                // Already on a tab that has an update waiting? Tapping it reloads the latest and clears the bell.
+                if (t.key === tab && t.update) {
+                  setReloadKeys((k) => ({ ...k, [t.key]: (k[t.key] || 0) + 1 }));
+                  updateAlerts.markSeen(t.key);
+                } else {
+                  setTab(t.key);
+                }
+              }} style={{
                 padding: "12px 16px", border: "none", background: "transparent", cursor: "pointer",
                 fontFamily: font.body, fontSize: 14, fontWeight: 600, textAlign: "left",
                 color: tab === t.key ? T.terracotta : T.muted,
@@ -3502,8 +3513,8 @@ function ClientApp({ session, onLogout }) {
         {tab === "package" && <YourPackageTab clientPackage={clientPackage} />}
         {tab === "analysis" && <SleepAnalysis client={{ id: session.clientId, name: session.clientName }} isCoach={false} />}
         {tab === "progress" && <ProgressTab clientId={session.clientId} isCoach={false} />}
-        {tab === "plan" && <SleepPlanEditor clientId={session.clientId} isCoach={false} />}
-        {tab === "toolbox" && <KnowledgeToolbox clientId={session.clientId} isCoach={false} />}
+        {tab === "plan" && <SleepPlanEditor key={`plan-${reloadKeys.plan}`} clientId={session.clientId} isCoach={false} />}
+        {tab === "toolbox" && <KnowledgeToolbox key={`toolbox-${reloadKeys.toolbox}`} clientId={session.clientId} isCoach={false} />}
         {tab === "resources" && <ClientResourcesViewer clientId={session.clientId} />}
         {tab === "intake" && (
           <IntakeForm
@@ -4229,14 +4240,23 @@ function useClientUpdateAlerts(clientId) {
   const load = useCallback(async () => {
     const [c, p, t] = await Promise.all([
       supabase.from("clients").select("plan_seen_at, toolbox_seen_at").eq("id", clientId).maybeSingle(),
-      supabase.from("sleep_plans").select("shared, shared_at, revised_at").eq("client_id", clientId).maybeSingle(),
+      supabase.from("sleep_plans").select("id, shared, shared_at").eq("client_id", clientId).maybeSingle(),
       supabase.from("knowledge_toolboxes").select("shared, shared_at, updated_at").eq("client_id", clientId).maybeSingle(),
     ]);
     const plan = p.data && p.data.shared ? p.data : null;
     const toolbox = t.data && t.data.shared ? t.data : null;
+    // Every save of a shared plan (and every share) stores a dated snapshot for the
+    // plan's History, so the newest snapshot is the "last revised" time. If history
+    // can't be read, fall back to the time it was shared.
+    let planVersionAt = null;
+    if (plan) {
+      const v = await supabase.from("sleep_plan_versions").select("created_at")
+        .eq("plan_id", plan.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+      planVersionAt = v.data ? v.data.created_at : null;
+    }
     return {
       ready: !c.error && !!c.data,
-      planAt: plan ? laterOf(plan.shared_at, plan.revised_at) : null,
+      planAt: plan ? (planVersionAt || plan.shared_at || null) : null,
       planSharedAt: plan ? plan.shared_at : null,
       planSeen: c.data ? c.data.plan_seen_at : null,
       toolboxAt: toolbox ? laterOf(toolbox.shared_at, toolbox.updated_at) : null,
@@ -4249,7 +4269,7 @@ function useClientUpdateAlerts(clientId) {
 
   useEffect(() => {
     refresh();
-    const id = setInterval(() => { if (!document.hidden) refresh(); }, 30000);
+    const id = setInterval(() => { if (!document.hidden) refresh(); }, 15000);
     const onVisible = () => { if (!document.hidden) refresh(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
@@ -4268,12 +4288,15 @@ function useClientUpdateAlerts(clientId) {
 
   const kindFor = (at, sharedAt, seen) => {
     if (!info.ready || !isAfter(at, seen)) return null;
-    return isAfter(sharedAt, seen) ? "New" : "Updated";
+    // "New" = shared clearly after they last opened the tab (2 min allowance for clock differences)
+    const sharedSince = sharedAt && (!seen || new Date(sharedAt) - new Date(seen) > 120000);
+    return sharedSince ? "New" : "Updated";
   };
   return {
     planKind: kindFor(info.planAt, info.planSharedAt, info.planSeen),
     toolboxKind: kindFor(info.toolboxAt, info.toolboxSharedAt, info.toolboxSeen),
     markSeen,
+    refresh,
   };
 }
 
@@ -6489,13 +6512,8 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
       setPlan(prev => ({ ...prev, ...update, shared: opts.share }));
     }
 
-    // Editing a plan the client can already see counts as a revision (triggers
-    // the "Updated" bell on the client's Sleep Plan tab)
-    if (opts.share === undefined && plan?.shared) {
-      const revisedAt = new Date().toISOString();
-      await supabase.from("sleep_plans").update({ revised_at: revisedAt }).eq("id", planId);
-      setPlan(prev => ({ ...prev, revised_at: revisedAt }));
-    }
+    // (Editing a plan the client can already see saves a version snapshot above;
+    // that snapshot's time is what triggers the "Updated" bell on their Sleep Plan tab.)
 
     setSaving(false);
     setSavedMsg(true);
