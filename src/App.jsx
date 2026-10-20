@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "16 Oct 2026 · two-device sync";
+const APP_BUILD = "20 Oct 2026 · note bells";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -1371,6 +1371,7 @@ function CoachApp({ session, onLogout }) {
   const [clients, setClients] = useState([]);
   const [senseChecks, setSenseChecks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [clientNotesFeed, setClientNotesFeed] = useState([]);
 
   const fetchClients = useCallback(async () => {
     const { data } = await supabase
@@ -1390,10 +1391,31 @@ function CoachApp({ session, onLogout }) {
     setSenseChecks(data || []);
   }, []);
 
-  useEffect(() => { fetchClients(); fetchSenseChecks(); }, [fetchClients, fetchSenseChecks]);
+  // Notes clients have left for the coach (just ids + times), so each client
+  // card can show a bell for notes the coach hasn't opened yet.
+  const fetchNotesFeed = useCallback(async () => {
+    const { data, error } = await supabase.from("client_notes").select("client_id, created_at").eq("author", "client");
+    if (!error) setClientNotesFeed(data || []);
+  }, []);
+
+  useEffect(() => { fetchClients(); fetchSenseChecks(); fetchNotesFeed(); }, [fetchClients, fetchSenseChecks, fetchNotesFeed]);
+
+  useEffect(() => {
+    const tickRefresh = () => { if (!document.hidden) { fetchClients(); fetchNotesFeed(); } };
+    const id = setInterval(tickRefresh, 30000);
+    document.addEventListener("visibilitychange", tickRefresh);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", tickRefresh); };
+  }, [fetchClients, fetchNotesFeed]);
+
+  const unreadByClient = {};
+  clientNotesFeed.forEach((n) => {
+    const c = clients.find((x) => x.id === n.client_id);
+    const seen = c && c.coach_notes_seen_at;
+    if (seen && n.created_at > seen) unreadByClient[n.client_id] = (unreadByClient[n.client_id] || 0) + 1;
+  });
 
   const openClient = (c) => { setSelectedClient(c); setView("client"); };
-  const back = () => { setView("dashboard"); setSelectedClient(null); fetchClients(); };
+  const back = () => { setView("dashboard"); setSelectedClient(null); fetchClients(); fetchNotesFeed(); };
   const openSenseCheck = (c) => { setSelectedSenseCheck(c); setView("sensecheck"); };
   const backFromSenseCheck = () => { setView("dashboard"); setSelectedSenseCheck(null); fetchSenseChecks(); };
 
@@ -1418,6 +1440,7 @@ function CoachApp({ session, onLogout }) {
             onSelectClient={openClient}
             onSelectSenseCheck={openSenseCheck}
             onRefresh={fetchClients}
+            unreadByClient={unreadByClient}
             onRefreshSenseChecks={fetchSenseChecks}
             onOpenSettings={() => setView("settings")}
           />
@@ -1453,7 +1476,7 @@ function Header({ subtitle, right, dark = false }) {
 }
 
 // ── DASHBOARD ───────────────────────────────────────────────────────────────
-function Dashboard({ clients, senseChecks = [], loading, onSelectClient, onSelectSenseCheck, onRefresh, onRefreshSenseChecks, onOpenSettings }) {
+function Dashboard({ clients, senseChecks = [], loading, onSelectClient, onSelectSenseCheck, onRefresh, onRefreshSenseChecks, onOpenSettings, unreadByClient = {} }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showAddSC, setShowAddSC] = useState(false);
   const [showExport, setShowExport] = useState(false);
@@ -1598,7 +1621,7 @@ function Dashboard({ clients, senseChecks = [], loading, onSelectClient, onSelec
         merged.map((item) =>
           item.kind === "sensecheck"
             ? <SenseCheckCard key={`sc-${item.row.id}`} record={item.row} onClick={() => onSelectSenseCheck(item.row)} onRefresh={onRefreshSenseChecks} />
-            : <ClientCard key={item.row.id} client={item.row} onClick={() => onSelectClient(item.row)} onRefresh={onRefresh} />
+            : <ClientCard key={item.row.id} client={item.row} onClick={() => onSelectClient(item.row)} onRefresh={onRefresh} unreadNotes={unreadByClient[item.row.id] || 0} />
         )
       )}
     </>
@@ -1612,7 +1635,7 @@ const TESTIMONIAL_STATUSES = [
   { key: "received",    label: "Received ✓",   color: C.success,       bg: C.successLight },
 ];
 
-function ClientCard({ client, onClick, onRefresh }) {
+function ClientCard({ client, onClick, onRefresh, unreadNotes = 0 }) {
   const start = client.support_start_date;
   const daysElapsed = start ? daysBetween(start, today()) : 0;
   const total = client.support_days || DEFAULT_SUPPORT_DAYS;
@@ -1663,6 +1686,11 @@ function ClientCard({ client, onClick, onRefresh }) {
                 +{client.extension_weeks}wk
               </span>
             )}
+            {unreadNotes > 0 && (
+              <span title="New notes from this client" style={gStyle.tag(C.white, C.terracotta)}>
+                🔔 {unreadNotes} new note{unreadNotes === 1 ? "" : "s"}
+              </span>
+            )}
           </div>
           <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Code: {client.access_code}</div>
         </div>
@@ -1710,6 +1738,7 @@ function ClientCard({ client, onClick, onRefresh }) {
 function ClientDetail({ client, onBack, onRefresh }) {
   const [tab, setTab] = useState("overview");
   const [clientData, setClientData] = useState(client);
+  const [unreadNotes, refreshUnreadNotes] = useUnreadNotes(client.id, true);
   // Night mode state lives here now (SleepDiaryViewer takes it as props) so
   // it can be shared with a screen's header/chrome if that's ever wanted for
   // the coach view too — for now this just keeps the diary's own toggle
@@ -1725,7 +1754,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
   const tabs = [
     { key: "overview", label: "Overview" },
     { key: "intake", label: "Intake" },
-    { key: "diary", label: "Sleep Diary" },
+    { key: "diary", label: "Sleep Diary", badge: unreadNotes },
     { key: "analysis", label: "📊 Analysis" },
     { key: "plan", label: "📋 Sleep Plan" },
     { key: "progress", label: "🎉 Progress" },
@@ -1754,6 +1783,13 @@ function ClientDetail({ client, onBack, onRefresh }) {
             color: tab === t.key ? C.white : C.terracottaDark,
           }}>
             {t.label}
+            {t.badge > 0 && (
+              <span style={{
+                display: "inline-flex", alignItems: "center", marginLeft: 6, padding: "1px 7px", borderRadius: 10,
+                background: tab === t.key ? C.white : C.terracotta, color: tab === t.key ? C.terracotta : C.white,
+                fontSize: 11, fontWeight: 700, lineHeight: 1.5,
+              }}>🔔 {t.badge}</span>
+            )}
           </button>
         ))}
       </div>
@@ -1763,7 +1799,7 @@ function ClientDetail({ client, onBack, onRefresh }) {
       {tab === "diary" && (
         <>
           <SleepDiaryViewer clientId={client.id} isCoach isDark={isDark} themeMode={themeMode} setThemeMode={setThemeMode} />
-          <NotesToRemember clientId={client.id} isCoach />
+          <NotesToRemember clientId={client.id} isCoach onSeen={() => { refreshUnreadNotes(); onRefresh(); }} />
         </>
       )}
       {tab === "analysis" && <SleepAnalysis client={clientData} isCoach />}
@@ -3275,6 +3311,7 @@ function ClientApp({ session, onLogout }) {
   const [hasIntake, setHasIntake] = useState(null);
   const [clientPackage, setClientPackage] = useState(null);
   const [diaryCount, setDiaryCount] = useState(0);
+  const [unreadNotes, refreshUnreadNotes] = useUnreadNotes(session.clientId, false);
   // Night mode lives here (not inside SleepDiaryViewer) so the header and tab
   // bar can go dark along with the diary content — the whole screen, not
   // just the diary card. It only actually applies while the Sleep Diary tab
@@ -3305,7 +3342,7 @@ function ClientApp({ session, onLogout }) {
 
   const tabs = [
     { key: "intake", label: "📃 Questionnaire" },
-    { key: "diary", label: "📖 Sleep Diary" },
+    { key: "diary", label: "📖 Sleep Diary", badge: unreadNotes },
     { key: "package", label: "🎁 Your Package" },
     { key: "analysis", label: "📊 Analysis" },
     { key: "plan", label: "📋 Sleep Plan" },
@@ -3368,6 +3405,7 @@ function ClientApp({ session, onLogout }) {
                 whiteSpace: "nowrap",
               }}>
                 {t.label}
+                <NoteBell count={t.badge} />
               </button>
             ))}
           </div>
@@ -3450,7 +3488,7 @@ function ClientApp({ session, onLogout }) {
           <>
             <SleepDiaryViewer clientId={session.clientId} isCoach={false} consultBooked={clientPackage?.consult_booked}
               isDark={isDark} themeMode={themeMode} setThemeMode={setThemeMode} />
-            <NotesToRemember clientId={session.clientId} isCoach={false} />
+            <NotesToRemember clientId={session.clientId} isCoach={false} onSeen={refreshUnreadNotes} />
           </>
         )}
         {tab === "package" && <YourPackageTab clientPackage={clientPackage} />}
@@ -4130,20 +4168,89 @@ function SuggestField({ value, onChange, suggestions = [], placeholder, disabled
 // a shared shortlist both sides can see and tick off once it's been
 // discussed. Coach can add to it too (e.g. "ask about X at our next call").
 // Needs a `client_notes` table in Supabase — see the SQL Chloé was given.
-function NotesToRemember({ clientId, isCoach }) {
+// Little bell badge: how many notes from the OTHER side haven't been opened yet.
+// "Seen" is stored per side on the client's row (coach_notes_seen_at /
+// client_notes_seen_at), so it's shared across both parents' devices and a
+// note only counts as new until that side opens the Notes card.
+function useUnreadNotes(clientId, forCoach) {
+  const [count, setCount] = useState(0);
+  const refresh = useCallback(async () => {
+    if (!clientId) return;
+    const seenCol = forCoach ? "coach_notes_seen_at" : "client_notes_seen_at";
+    const { data: row, error } = await supabase.from("clients").select(seenCol).eq("id", clientId).maybeSingle();
+    if (error || !row || !row[seenCol]) { setCount(0); return; }
+    const { count: n, error: countErr } = await supabase.from("client_notes")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", clientId).eq("author", forCoach ? "client" : "coach")
+      .gt("created_at", row[seenCol]);
+    setCount(countErr ? 0 : (n || 0));
+  }, [clientId, forCoach]);
+  useEffect(() => {
+    refresh();
+    const id = setInterval(() => { if (!document.hidden) refresh(); }, 30000);
+    const onVisible = () => { if (!document.hidden) refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, [refresh]);
+  return [count, refresh];
+}
+
+// Small round badge used beside tab labels.
+function NoteBell({ count, style }) {
+  if (!count) return null;
+  return (
+    <span title={`${count} new note${count === 1 ? "" : "s"}`} style={{
+      display: "inline-flex", alignItems: "center", gap: 3, marginLeft: 6, padding: "1px 7px",
+      borderRadius: 10, background: C.terracotta, color: C.white, fontSize: 11, fontWeight: 700,
+      lineHeight: 1.5, verticalAlign: "middle", ...style,
+    }}>🔔 {count}</span>
+  );
+}
+
+function NotesToRemember({ clientId, isCoach, onSeen }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
+  const [seenAt, setSeenAt] = useState(null);
+  const [highlight, setHighlight] = useState([]); // ids of notes flagged "New" while this card is open
+  const otherAuthor = isCoach ? "client" : "coach";
+  const seenCol = isCoach ? "coach_notes_seen_at" : "client_notes_seen_at";
 
   const load = async () => {
-    const { data, error } = await supabase.from("client_notes")
-      .select("*").eq("client_id", clientId)
-      .order("created_at", { ascending: false });
-    if (!error) setNotes(data || []);
+    const [notesRes, seenRes] = await Promise.all([
+      supabase.from("client_notes").select("*").eq("client_id", clientId).order("created_at", { ascending: false }),
+      supabase.from("clients").select(seenCol).eq("id", clientId).maybeSingle(),
+    ]);
+    if (!notesRes.error) setNotes(notesRes.data || []);
+    if (!seenRes.error && seenRes.data) setSeenAt(seenRes.data[seenCol] || null);
     setLoading(false);
   };
-  useEffect(() => { load(); }, [clientId]);
+  useEffect(() => {
+    load();
+    // pick up notes added by the other side without needing a reload
+    const id = setInterval(() => { if (!document.hidden) load(); }, 20000);
+    const onVisible = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, [clientId]);
+
+  const unread = notes.filter((n) => n.author === otherAuthor && seenAt && n.created_at > seenAt);
+
+  const markSeen = async (list) => {
+    const newest = list.reduce((m, n) => (n.created_at > m ? n.created_at : m), "");
+    if (!newest) return;
+    setSeenAt(newest);
+    await supabase.from("clients").update({ [seenCol]: newest }).eq("id", clientId);
+    if (onSeen) onSeen();
+  };
+
+  // Opening the card (or having it open when a new note arrives) counts as seeing the notes
+  useEffect(() => {
+    if (!open || loading || unread.length === 0) return;
+    setHighlight((h) => Array.from(new Set([...h, ...unread.map((n) => n.id)])));
+    markSeen(unread);
+  }, [open, loading, notes, seenAt]);
 
   const addNote = async () => {
     const text = draft.trim();
@@ -4167,6 +4274,7 @@ function NotesToRemember({ clientId, isCoach }) {
 
   if (loading) return null;
   const openCount = notes.filter(n => !n.resolved).length;
+  const authorLabel = (n) => (n.author === "coach" ? (isCoach ? "You" : "From Chloé") : (isCoach ? "From client" : "You"));
 
   return (
     <div style={{ ...gStyle.card, marginTop: 20 }}>
@@ -4174,9 +4282,10 @@ function NotesToRemember({ clientId, isCoach }) {
         width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
         background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: font.body,
       }}>
-        <span style={{ fontFamily: font.display, fontSize: 16, color: C.terracotta, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontFamily: font.display, fontSize: 16, color: C.terracotta, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           📝 {isCoach ? "Notes to remember (from client)" : "Notes to remember to ask Chloé"}
           {openCount > 0 && <span style={gStyle.tag(C.white, C.terracotta)}>{openCount}</span>}
+          {!open && unread.length > 0 && <span style={gStyle.tag(C.white, C.gold)}>🔔 {unread.length} new</span>}
         </span>
         <span style={{ color: C.gold, fontSize: 12 }}>{open ? "▲" : "▼"}</span>
       </button>
@@ -4208,12 +4317,14 @@ function NotesToRemember({ clientId, isCoach }) {
                   padding: "10px 12px", borderRadius: 8,
                   background: n.resolved ? C.cream : C.terracottaLight,
                   opacity: n.resolved ? 0.6 : 1,
+                  boxShadow: highlight.includes(n.id) ? `0 0 0 1.5px ${C.gold}` : "none",
                 }}>
                   <input type="checkbox" checked={!!n.resolved} onChange={() => toggleResolved(n)} style={{ marginTop: 3 }} />
                   <div style={{ flex: 1 }}>
                     <p style={{ margin: 0, fontSize: 13, color: C.dark, textDecoration: n.resolved ? "line-through" : "none" }}>{n.text}</p>
                     <p style={{ margin: "4px 0 0", fontSize: 10, color: C.muted }}>
-                      {n.author === "coach" ? "From Chloé" : "You"} · {new Date(n.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
+                      {authorLabel(n)} · {new Date(n.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
+                      {highlight.includes(n.id) && <span style={{ ...gStyle.tag(C.white, C.gold), marginLeft: 6 }}>New</span>}
                     </p>
                   </div>
                   <button onClick={() => removeNote(n.id)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>×</button>
