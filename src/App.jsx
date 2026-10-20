@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "20 Oct 2026 · plan & toolbox bells v3";
+const APP_BUILD = "20 Oct 2026 · plan, toolbox & resource bells";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -3314,7 +3314,7 @@ function ClientApp({ session, onLogout }) {
   const [unreadNotes, refreshUnreadNotes] = useUnreadNotes(session.clientId, false);
   const updateAlerts = useClientUpdateAlerts(session.clientId);
   // Bumping a key remounts the Sleep Plan / Toolbox so a client already on the tab can pull in a fresh version
-  const [reloadKeys, setReloadKeys] = useState({ plan: 0, toolbox: 0 });
+  const [reloadKeys, setReloadKeys] = useState({ plan: 0, toolbox: 0, resources: 0 });
   // Night mode lives here (not inside SleepDiaryViewer) so the header and tab
   // bar can go dark along with the diary content — the whole screen, not
   // just the diary card. It only actually applies while the Sleep Diary tab
@@ -3345,8 +3345,14 @@ function ClientApp({ session, onLogout }) {
 
   // Opening the Sleep Plan or Toolbox tab clears its bell
   useEffect(() => {
-    if (tab === "plan" || tab === "toolbox") updateAlerts.markSeen(tab);
-    updateAlerts.refresh(); // switching tabs is a good moment to check for anything new
+    // Switching tabs is a good moment to check for anything new. When opening a tab that
+    // has its own bell, mark it seen FIRST and only then re-check, so the check can't
+    // finish early and put the bell straight back.
+    if (tab === "plan" || tab === "toolbox" || tab === "resources") {
+      updateAlerts.markSeen(tab).then(() => updateAlerts.refresh());
+    } else {
+      updateAlerts.refresh();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -3357,7 +3363,7 @@ function ClientApp({ session, onLogout }) {
     { key: "analysis", label: "📊 Analysis" },
     { key: "plan", label: "📋 Sleep Plan", update: updateAlerts.planKind },
     { key: "progress", label: "🎉 Progress" },
-    { key: "resources", label: "🎬 Resources" },
+    { key: "resources", label: "🎬 Resources", update: updateAlerts.resourcesKind },
     { key: "toolbox", label: "🧰 Toolbox", update: updateAlerts.toolboxKind },
   ];
 
@@ -3411,7 +3417,7 @@ function ClientApp({ session, onLogout }) {
                 // Already on a tab that has an update waiting? Tapping it reloads the latest and clears the bell.
                 if (t.key === tab && t.update) {
                   setReloadKeys((k) => ({ ...k, [t.key]: (k[t.key] || 0) + 1 }));
-                  updateAlerts.markSeen(t.key);
+                  updateAlerts.markSeen(t.key, true);
                 } else {
                   setTab(t.key);
                 }
@@ -3515,7 +3521,7 @@ function ClientApp({ session, onLogout }) {
         {tab === "progress" && <ProgressTab clientId={session.clientId} isCoach={false} />}
         {tab === "plan" && <SleepPlanEditor key={`plan-${reloadKeys.plan}`} clientId={session.clientId} isCoach={false} />}
         {tab === "toolbox" && <KnowledgeToolbox key={`toolbox-${reloadKeys.toolbox}`} clientId={session.clientId} isCoach={false} />}
-        {tab === "resources" && <ClientResourcesViewer clientId={session.clientId} />}
+        {tab === "resources" && <ClientResourcesViewer key={`resources-${reloadKeys.resources}`} clientId={session.clientId} newIds={updateAlerts.highlightResourceIds} />}
         {tab === "intake" && (
           <IntakeForm
             clientId={session.clientId}
@@ -4254,8 +4260,35 @@ function useClientUpdateAlerts(clientId) {
         .eq("plan_id", plan.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
       planVersionAt = v.data ? v.data.created_at : null;
     }
+    // Resources: everything this client can currently access (included by their
+    // package / "All clients" / granted to them) that they haven't seen yet.
+    // "Seen" is a list of resource ids kept on the client's row, so it catches new
+    // uploads, access changes, package changes and individual grants alike.
+    // (Separate queries, so a problem here can never switch off the other alerts.)
+    let resourcesReady = false, accessibleResourceIds = [], newResourceIds = [];
+    const [rc, rl, rg] = await Promise.all([
+      supabase.from("clients").select("package, resources_seen").eq("id", clientId).maybeSingle(),
+      supabase.from("resource_library").select("id, default_access"),
+      supabase.from("client_resource_grants").select("resource_id").eq("client_id", clientId),
+    ]);
+    if (!rc.error && rc.data && !rl.error && !rg.error) {
+      resourcesReady = true;
+      const pkg = rc.data.package || null;
+      const granted = new Set((rg.data || []).map((g) => String(g.resource_id)));
+      accessibleResourceIds = (rl.data || [])
+        .filter((r) => resourceIncludedByDefault(r, pkg) || granted.has(String(r.id)))
+        .map((r) => r.id);
+      if (!Array.isArray(rc.data.resources_seen)) {
+        // First time we've looked: treat everything they can already see as seen
+        await supabase.from("clients").update({ resources_seen: accessibleResourceIds }).eq("id", clientId);
+      } else {
+        const seen = new Set(rc.data.resources_seen.map(String));
+        newResourceIds = accessibleResourceIds.filter((id) => !seen.has(String(id)));
+      }
+    }
     return {
       ready: !c.error && !!c.data,
+      resourcesReady, accessibleResourceIds, newResourceIds,
       planAt: plan ? (planVersionAt || plan.shared_at || null) : null,
       planSharedAt: plan ? plan.shared_at : null,
       planSeen: c.data ? c.data.plan_seen_at : null,
@@ -4275,9 +4308,23 @@ function useClientUpdateAlerts(clientId) {
     return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
   }, [refresh]);
 
+  // Resource ids to outline in gold while the client is looking at the Resources tab
+  const [highlightResourceIds, setHighlightResourceIds] = useState([]);
+
   // Opening the tab = seeing it: record the alert time the client has now caught up with
-  const markSeen = useCallback(async (which) => {
+  // (for Resources: the list of resources they can now see). keepExisting=true is used when
+  // tapping the already-open tab to pull in extras without dropping earlier outlines.
+  const markSeen = useCallback(async (which, keepExisting = false) => {
     const fresh = await load();
+    if (which === "resources") {
+      if (!fresh.resourcesReady) return;
+      setHighlightResourceIds((prev) => keepExisting
+        ? Array.from(new Set([...prev, ...fresh.newResourceIds]))
+        : fresh.newResourceIds);
+      setInfo({ ...fresh, newResourceIds: [] });
+      await supabase.from("clients").update({ resources_seen: fresh.accessibleResourceIds }).eq("id", clientId);
+      return;
+    }
     if (!fresh.ready) return;
     const at = which === "plan" ? fresh.planAt : fresh.toolboxAt;
     if (!at) return;
@@ -4295,6 +4342,8 @@ function useClientUpdateAlerts(clientId) {
   return {
     planKind: kindFor(info.planAt, info.planSharedAt, info.planSeen),
     toolboxKind: kindFor(info.toolboxAt, info.toolboxSharedAt, info.toolboxSeen),
+    resourcesKind: info.newResourceIds && info.newResourceIds.length ? `${info.newResourceIds.length} New` : null,
+    highlightResourceIds,
     markSeen,
     refresh,
   };
@@ -4303,7 +4352,7 @@ function useClientUpdateAlerts(clientId) {
 function UpdateBell({ kind }) {
   if (!kind) return null;
   return (
-    <span title={kind === "New" ? "Chloé has shared this with you" : "Chloé has updated this"} style={{
+    <span title={kind === "Updated" ? "Chloé has updated this" : "Chloé has shared something new with you"} style={{
       display: "inline-flex", alignItems: "center", gap: 3, marginLeft: 6, padding: "1px 7px",
       borderRadius: 10, background: C.terracotta, color: C.white, fontSize: 11, fontWeight: 700,
       lineHeight: 1.5, verticalAlign: "middle",
@@ -8383,7 +8432,7 @@ function ClientResourceGrants({ clientId, clientData }) {
 }
 
 // ── CLIENT: read-only viewer, grouped by category ───────────────────────────
-function ClientResourcesViewer({ clientId }) {
+function ClientResourcesViewer({ clientId, newIds = [] }) {
   const [resources, setResources] = useState([]);
   const [clientPackage, setClientPackage] = useState(null);
   const [grantedIds, setGrantedIds] = useState(new Set());
@@ -8415,6 +8464,16 @@ function ClientResourcesViewer({ clientId }) {
     };
     load();
   }, [clientId]);
+
+  // Resources Chloé has added since the client last looked get a gold outline + bell.
+  const newKey = newIds.map(String).join(",");
+  const newSet = new Set(newIds.map(String));
+  // …and the categories holding them open up automatically so they're easy to spot
+  useEffect(() => {
+    if (loading || newSet.size === 0) return;
+    const cats = resources.filter((r) => newSet.has(String(r.id))).map((r) => r.category?.trim() || "General");
+    if (cats.length) setExpandedCats((prev) => new Set([...prev, ...cats]));
+  }, [loading, newKey]);
 
   if (loading) return <p style={{ color: C.muted, padding: 40 }}>Loading resources…</p>;
 
@@ -8486,7 +8545,14 @@ function ClientResourcesViewer({ clientId }) {
                 padding: "14px 18px", cursor: "pointer", textAlign: "left", fontFamily: font.body,
               }}
             >
-              <span style={{ fontFamily: font.display, color: C.terracotta, fontSize: 18 }}>{cat}</span>
+              <span style={{ fontFamily: font.display, color: C.terracotta, fontSize: 18 }}>
+                {cat}
+                {items.some((r) => newSet.has(String(r.id))) && (
+                  <span style={{ ...gStyle.tag(C.white, C.gold), marginLeft: 10, fontFamily: font.body, fontSize: 11 }}>
+                    🔔 {items.filter((r) => newSet.has(String(r.id))).length} new
+                  </span>
+                )}
+              </span>
               <span style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
                 <span style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>{summarizeResourceCounts(items)}</span>
                 <span style={{ color: C.gold, fontSize: 12 }}>{isOpen ? "▲" : "▼"}</span>
@@ -8495,7 +8561,13 @@ function ClientResourcesViewer({ clientId }) {
             {isOpen && (
               <div className="resource-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 14 }}>
                 {items.map((r) => (
-                  <div key={r.id} style={gStyle.card}>
+                  <div key={r.id} style={{
+                    ...gStyle.card, position: "relative",
+                    boxShadow: newSet.has(String(r.id)) ? `0 0 0 2px ${C.gold}` : gStyle.card.boxShadow,
+                  }}>
+                    {newSet.has(String(r.id)) && (
+                      <span style={{ ...gStyle.tag(C.white, C.gold), position: "absolute", top: 10, right: 10, zIndex: 2 }}>🔔 New</span>
+                    )}
                     <ResourceMedia resource={r} onOpenPdf={setViewingPdf} />
                     <div style={{ fontWeight: 700, fontSize: 14, color: C.dark, margin: "10px 0 2px" }}>{r.title}</div>
                     {r.description && <div style={{ fontSize: 12, color: C.mid }}>{r.description}</div>}
