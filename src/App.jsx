@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "21 Oct 2026 · questionnaire saves answer-by-answer";
+const APP_BUILD = "22 Oct 2026 · still-going nap & wake reminders";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -4005,6 +4005,8 @@ const CHECKIN_UNLOCK_DAYS = 7;
 // Above these, a duration is far more likely to be an AM/PM slip than real.
 const NAP_MAX_PLAUSIBLE_MINS = 240;    // 4h
 const WAKING_MAX_PLAUSIBLE_MINS = 300; // 5h
+// A nap / night waking that has been STARTED but not stopped: after this long we ask "is it still going?"
+const RUNNING_ASK_MINS = 240; // 4h
 const NIGHT_MAX_PLAUSIBLE_MINS = 840;  // 14h — flags a bed_time/wake_time pair that's likely an AM/PM slip
 
 // ── FOUNDING FAMILY APP TESTING ──────────────────────────────────────────────
@@ -4765,6 +4767,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
   // Ticks every 30s so an in-progress nap/waking's "so far" duration stays
   // roughly live without needing a per-row timer.
   const [nowTick, setNowTick] = useState(() => getCurrentTime());
+  // "Still going" answers: item id → how long it must have run before we ask again
+  const [runningSnooze, setRunningSnooze] = useState({});
   useEffect(() => {
     const id = setInterval(() => setNowTick(getCurrentTime()), 30000);
     return () => clearInterval(id);
@@ -5185,6 +5189,55 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
 
   if (loading || !entry) return <p style={{ color: T.muted, padding: 40 }}>Loading…</p>;
 
+  // ── Naps / night wakings that were started but never stopped ─────────────
+  // Returns null if all is well, otherwise how long it's been running (stale = it's from a
+  // previous day, so it can't still be going and just needs an end time).
+  const runningCheck = (kind, startTime, id) => {
+    if (!startTime) return null;
+    const t = today();
+    const stale = kind === "nap" ? selectedDate < t : selectedDate < offsetDate(t, -1);
+    const elapsed = diffMins(parseTime(startTime), parseTime(nowTick));
+    if (stale) return { stale: true, elapsed };
+    if (elapsed >= (runningSnooze[id] ?? RUNNING_ASK_MINS)) return { stale: false, elapsed };
+    return null;
+  };
+  const runningNotice = (kind, item, startTime, endField, onEnd) => {
+    const chk = runningCheck(kind, startTime, item.id);
+    if (!chk) return null;
+    const what = kind === "nap" ? "nap" : "wake";
+    return (
+      <div style={{
+        background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
+        padding: "10px 12px", marginBottom: 10, marginTop: kind === "nap" ? 0 : 10, fontSize: 12.5, color: "#6B4A1F",
+      }}>
+        <strong>
+          ⏰ {chk.stale
+            ? `This ${what} was started at ${to12hLabel(startTime)} but never stopped.`
+            : `This ${what} has been running for ${fmtDuration(chk.elapsed)}. Is it still going?`}
+        </strong>
+        {isCoach ? (
+          <div style={{ marginTop: 4 }}>The client may have forgotten to stop it, so its length and the day's totals may be off.</div>
+        ) : (
+          <>
+            <div style={{ marginTop: 4 }}>
+              {kind === "nap" ? "If they've woken up, set when they woke:" : "If they've gone back to sleep, set when:"}
+            </div>
+            <div style={{ marginTop: 6, maxWidth: 220 }}>
+              <TimeSelect dark={isDark} value={item[endField]} onChange={onEnd} placeholder={kind === "nap" ? "Woke at…" : "Asleep at…"} />
+            </div>
+            {!chk.stale && (
+              <button type="button"
+                onClick={() => setRunningSnooze((p) => ({ ...p, [item.id]: chk.elapsed + RUNNING_ASK_MINS }))}
+                style={{ ...gStyle.btnSecondary, marginTop: 8, padding: "7px 12px", fontSize: 12 }}>
+                Yes, still {kind === "nap" ? "sleeping" : "awake"}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
+
   const totalNapMins = calcNapMins(entry);
   // Same AM/PM-slip detection as naps, applied to the night pairing: yesterday's
   // bed_time -> today's wake_time, and today's bed_time -> tomorrow's wake_time.
@@ -5438,11 +5491,12 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
                   </button>
                 </div>
               )}
-              {nap.start && !nap.end && (
+              {nap.start && !nap.end && !runningCheck("nap", nap.start, nap.id) && (
                 <p style={{ fontSize: 12, color: T.blue, marginBottom: 10 }}>
                   😴 Napping now — {fmtDuration(diffMins(parseTime(nap.start), parseTime(nowTick)))} so far
                 </p>
               )}
+              {nap.start && !nap.end && runningNotice("nap", nap, nap.start, "end", (v) => updateNap(idx, "end", v))}
               {napFlag && (
                 <div style={{
                   background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
@@ -5700,11 +5754,12 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
                         </button>
                       </div>
                     )}
-                    {w.woke_at && !w.back_asleep_at && (
+                    {w.woke_at && !w.back_asleep_at && !runningCheck("waking", w.woke_at, w.id) && (
                       <p style={{ fontSize: 12, color: T.blue, marginTop: 8 }}>
                         👀 Awake now — {fmtDuration(diffMins(parseTime(w.woke_at), parseTime(nowTick)))} so far
                       </p>
                     )}
+                    {w.woke_at && !w.back_asleep_at && runningNotice("waking", w, w.woke_at, "back_asleep_at", (v) => updateWaking(idx, "back_asleep_at", v))}
                     {wakeFlag && (
                       <div style={{
                         background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
