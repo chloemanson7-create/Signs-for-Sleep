@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "22 Oct 2026 · still-going nap & wake reminders";
+const APP_BUILD = "22 Oct 2026 · unfinished wakes flagged in analysis";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -4222,10 +4222,14 @@ const diaryContentEq = (a, b, includeDerived) => {
 // Used when a client chooses to log each night waking individually rather than
 // entering a quick total — keeps night_wakings_count / night_wakings_awake_mins
 // (used everywhere else in the app) populated the same way either method is used.
+// A wake that has STARTED counts as a waking (it happened), but only wakes with a
+// "back asleep" time add awake minutes (an unfinished one has no known length).
+// `open` = how many wakes were started but never finished.
 const calcDetailedWakings = (wakings) => {
-  const complete = (wakings || []).filter(w => w.woke_at && w.back_asleep_at);
+  const started = (wakings || []).filter(w => w.woke_at);
+  const complete = started.filter(w => w.back_asleep_at);
   const mins = complete.reduce((sum, w) => sum + Math.max(0, diffMins(parseTime(w.woke_at), parseTime(w.back_asleep_at))), 0);
-  return { count: complete.length, mins };
+  return { count: started.length, open: started.length - complete.length, mins };
 };
 const emptyEntry = () => ({
   wake_time: "", bed_time: "", notes: "",
@@ -5795,6 +5799,11 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
               {detailedWakingTotals.count > 0 && (
                 <p style={{ fontSize: 12, color: T.muted, marginTop: 10 }}>
                   {detailedWakingTotals.count} waking{detailedWakingTotals.count !== 1 ? "s" : ""} · {fmtDuration(detailedWakingTotals.mins)} total time awake
+                  {detailedWakingTotals.open > 0 && (
+                    <span style={{ color: "#6B4A1F" }}>
+                      {" "}· ⏰ {detailedWakingTotals.open} wake{detailedWakingTotals.open !== 1 ? "s" : ""} not finished, so not included in the time awake. Add the "back asleep" time to include it.
+                    </span>
+                  )}
                 </p>
               )}
               <div style={{ marginTop: 12 }}>
@@ -5988,8 +5997,18 @@ function SleepAnalysis({ client, isCoach }) {
     const avgWW = wakeWindows.length > 0
       ? Math.round(wakeWindows.reduce((a,b) => a+b,0) / wakeWindows.length) : null;
 
-    const nightWakings = e.night_wakings_count !== null && e.night_wakings_count !== ""
-      ? parseInt(e.night_wakings_count) : null;
+    // Detailed-mode nights: work the count out from the logged wakes themselves so that
+    // wakes with no "back asleep" time are counted (and flagged), including on past days.
+    const detailedOf = (x) => (x && x.night_wakings_mode === "detailed" && Array.isArray(x.night_wakings))
+      ? calcDetailedWakings(x.night_wakings) : null;
+    const ownWakes = detailedOf(e);
+    const prevWakes = detailedOf(prevEntry);
+    const nightWakings = ownWakes
+      ? ownWakes.count
+      : (e.night_wakings_count !== null && e.night_wakings_count !== ""
+        ? parseInt(e.night_wakings_count) : null);
+    const openWakes = ownWakes ? ownWakes.open : 0;            // unfinished wakes logged on this date
+    const nightOpenWakes = prevWakes ? prevWakes.open : 0;      // unfinished wakes behind this row's "Night Sleep"
     const wakeTime = e.wake_time || null;
     const bedTime = e.bed_time || null;
 
@@ -6000,6 +6019,7 @@ function SleepAnalysis({ client, isCoach }) {
       nightMins: backwardNightMins,
       totalMins,
       napCount, avgWW, nightWakings, wakeTime, bedTime,
+      openWakes, nightOpenWakes,
       excluded: !!e.exclude_from_analysis,
       tags: e.tags || [],
     };
@@ -6381,6 +6401,17 @@ function SleepAnalysis({ client, isCoach }) {
             🚫 {excludedCount} day{excludedCount !== 1 ? "s" : ""} excluded from the numbers below — toggled from the Sleep Diary tab on the day in question.
           </p>
         )}
+        {filteredDays.some(d => d.openWakes > 0) && (() => {
+          const nights = filteredDays.filter(d => d.openWakes > 0);
+          const many = nights.length !== 1;
+          return (
+            <p style={{ fontSize: 12, color: "#6B4A1F", marginTop: 12, marginBottom: 0, lineHeight: 1.5 }}>
+              ⏰ {nights.length} night{many ? "s" : ""} ({nights.map(d => d.label).join(", ")}) {many ? "have" : "has"} night wakes with no
+              "back asleep" time. They're counted as wakings, but the time awake is missing, so {many ? "those nights'" : "that night's"} sleep
+              may look a little longer than it was. Marked * in the Daily Breakdown.
+            </p>
+          );
+        })()}
       </div>
 
       {/* Plain-language trend sentence — visible to coach and client alike */}
@@ -6635,10 +6666,16 @@ function SleepAnalysis({ client, isCoach }) {
                   </td>
                   <td style={{ padding: "8px 10px", color: C.mid }}>{d.napCount}</td>
                   <td style={{ padding: "8px 10px", color: C.blue }}>{fmtDuration(d.napMins)}</td>
-                  <td style={{ padding: "8px 10px", color: C.terracotta }}>{fmtDuration(d.nightMins)}</td>
+                  <td style={{ padding: "8px 10px", color: C.terracotta }}>
+                    {fmtDuration(d.nightMins)}
+                    {d.nightOpenWakes > 0 && <span title={`${d.nightOpenWakes} night wake${d.nightOpenWakes !== 1 ? "s" : ""} from the night before ${d.nightOpenWakes !== 1 ? "have" : "has"} no "back asleep" time, so this may be slightly overstated`} style={{ color: "#B7791F", fontWeight: 700 }}> *</span>}
+                  </td>
                   <td style={{ padding: "8px 10px", color: C.gold, fontWeight: 600 }}>{fmtDuration(d.totalMins)}</td>
                   <td style={{ padding: "8px 10px", color: C.mid }}>{d.avgWW ? fmtDuration(d.avgWW) : "—"}</td>
-                  <td style={{ padding: "8px 10px", color: C.terracottaDark }}>{d.nightWakings !== null ? d.nightWakings : "—"}</td>
+                  <td style={{ padding: "8px 10px", color: C.terracottaDark }}>
+                    {d.nightWakings !== null ? d.nightWakings : "—"}
+                    {d.openWakes > 0 && <span title={`Includes ${d.openWakes} wake${d.openWakes !== 1 ? "s" : ""} with no "back asleep" time (counted, but no time awake)`} style={{ color: "#B7791F", fontWeight: 700 }}> *</span>}
+                  </td>
                   <td style={{ padding: "8px 10px", color: C.danger, fontSize: 12 }}>{tagLabels(d.tags) || "—"}</td>
                 </tr>
               ))}
