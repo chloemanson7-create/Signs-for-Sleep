@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "22 Oct 2026 · unfinished wakes flagged in analysis";
+const APP_BUILD = "23 Oct 2026 · lifetime app access";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -1253,12 +1253,24 @@ function LoginScreen({ onLogin }) {
       return;
     }
 
-    const { data: client } = await supabase
+    let { data: client } = await supabase
       .from("clients")
       .select("id, name")
       .eq("access_code", upper)
       .eq("status", "active")
       .maybeSingle();
+    // Clients whose support period has been closed since lifetime access was introduced
+    // keep their app login for good. (Separate lookup, so a hiccup here can never stop an
+    // active client logging in.)
+    if (!client) {
+      const kept = await supabase
+        .from("clients")
+        .select("id, name")
+        .eq("access_code", upper)
+        .eq("lifetime_access", true)
+        .maybeSingle();
+      if (kept.data) client = kept.data;
+    }
 
     if (client) {
       onLogin({ role: "client", clientId: client.id, clientName: client.name });
@@ -1698,6 +1710,9 @@ function ClientCard({ client, onClick, onRefresh, unreadNotes = 0 }) {
           <span style={gStyle.tag(client.status === "active" ? C.success : C.muted, client.status === "active" ? C.successLight : "#f0f0f0")}>
             {client.status}
           </span>
+          {client.status === "closed" && client.lifetime_access && (
+            <span title="Support is closed on your side, but this client keeps their app login for life" style={gStyle.tag(C.gold, C.goldLight)}>🔓 Lifetime app access</span>
+          )}
           {contactDue && <span style={gStyle.tag(C.warning, C.warningLight)}>Contact due</span>}
           {ending && <span style={gStyle.tag(C.danger, C.dangerLight)}>Ending soon</span>}
         </div>
@@ -1828,8 +1843,15 @@ function ClientOverview({ client, onRefresh }) {
     onRefresh();
   };
 
+  // Closing ends YOUR side of things (support period, reminders, "Active" list), but the
+  // client keeps their app login for life.
   const closeClient = async () => {
-    await supabase.from("clients").update({ status: "closed" }).eq("id", client.id);
+    const { error } = await supabase.from("clients").update({ status: "closed", lifetime_access: true }).eq("id", client.id);
+    if (error) {
+      // The lifetime_access column isn't in the database yet: still close them, but tell Chloé plainly
+      await supabase.from("clients").update({ status: "closed" }).eq("id", client.id);
+      alert("This client has been closed, BUT their lifetime app access couldn't be saved yet, so they'll be locked out. Please run the lifetime-access SQL in Supabase, then close them again (reopen, then close).");
+    }
     onRefresh();
   };
 
@@ -1887,6 +1909,13 @@ function ClientOverview({ client, onRefresh }) {
           <button style={{ ...gStyle.btnGold, flex: 1 }} onClick={reopenClient}>↩ Reopen as active client</button>
         )}
       </div>
+      <p style={{ fontSize: 12, color: C.muted, margin: "10px 0 0", lineHeight: 1.5 }}>
+        {client.status === "active"
+          ? "Closing ends the support period on your side. The client keeps access to the app for life."
+          : client.lifetime_access
+            ? "🔓 Support is closed on your side. This client keeps their app login for life."
+            : "Closed before lifetime access was introduced, so this client can no longer log in. Reopening makes them active again."}
+      </p>
     </div>
   );
 }
@@ -3308,6 +3337,12 @@ function YourPackageTab({ clientPackage }) {
         )}
       </div>
 
+      {clientPackage.status === "closed" ? (
+        <p style={{ fontSize: 14, color: C.dark, background: C.goldLight, borderRadius: 8, padding: "12px 14px", margin: 0, lineHeight: 1.6 }}>
+          🧡 Your support period with Chloé has finished. This app is yours to keep: your sleep diary, sleep plan, toolbox and resources
+          will always be here whenever you need them.
+        </p>
+      ) : (<>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: C.muted, marginBottom: 6 }}>
         <span>Day {daysElapsed} of {total}</span>
         <span>{daysLeft} day{daysLeft !== 1 ? "s" : ""} of support remaining</span>
@@ -3321,6 +3356,7 @@ function YourPackageTab({ clientPackage }) {
           🧡 You've added {extensionWeeks} extension week{extensionWeeks > 1 ? "s" : ""} of ongoing support to your package.
         </p>
       )}
+      </>)}
     </div>
   );
 }
@@ -3353,7 +3389,7 @@ function ClientApp({ session, onLogout }) {
         if (!done) setTab("intake");
       });
     // Load package info
-    supabase.from("clients").select("package, extension_weeks, calls_total, calls_used, consult_booked, is_app_tester, support_days, support_start_date")
+    supabase.from("clients").select("package, extension_weeks, calls_total, calls_used, consult_booked, is_app_tester, support_days, support_start_date, status")
       .eq("id", session.clientId).maybeSingle()
       .then(({ data }) => { if (data) setClientPackage(data); });
     // Load diary count
@@ -3394,7 +3430,8 @@ function ClientApp({ session, onLogout }) {
   const callsRemaining = Math.max(0, callsTotal - callsUsed);
   const checkinUnlocked = diaryCount >= CHECKIN_UNLOCK_DAYS &&
     hasIntake && clientPackage?.consult_booked &&
-    (hasFoundations || hasExtension) && callsRemaining > 0;
+    (hasFoundations || hasExtension) && callsRemaining > 0 &&
+    clientPackage?.status === "active"; // support closed → no more booking calls
 
   return (
     <div style={{ ...gStyle.app, background: T.cream, color: T.dark }}>
