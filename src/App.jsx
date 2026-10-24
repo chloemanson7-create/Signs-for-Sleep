@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "23 Oct 2026 · lifetime app access";
+const APP_BUILD = "24 Oct 2026 · text support week & returning-client note";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -2034,6 +2034,10 @@ function ClientSettings({ client, onRefresh, onDelete }) {
   const [isAppTester, setIsAppTester] = useState(client.is_app_tester || false);
   const [testimonialText, setTestimonialText] = useState(client.testimonial_text || "");
   const [feedbackText, setFeedbackText] = useState(client.feedback_text || "");
+  // Gentle Start "text support" window (WhatsApp message button), see useCoachContact
+  const [textUntil, setTextUntil] = useState(client.text_support_until ? String(client.text_support_until).slice(0, 10) : "");
+  const [textInfo, setTextInfo] = useState(null);
+  useEffect(() => { loadTextSupportInfo(client.id).then(setTextInfo); }, [client.id]);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -2079,9 +2083,16 @@ function ClientSettings({ client, onRefresh, onDelete }) {
       consult_booked: consultBooked,
       is_app_tester: isAppTester,
     }).eq("id", client.id);
+    // Saved on its own so the rest of the settings still save if this column isn't in the database yet
+    let textErr = false;
+    if (textUntil !== (client.text_support_until ? String(client.text_support_until).slice(0, 10) : "")) {
+      const r = await supabase.from("clients").update({ text_support_until: textUntil || null }).eq("id", client.id);
+      textErr = !!r.error;
+      if (!r.error) loadTextSupportInfo(client.id).then(setTextInfo);
+    }
     setSaving(false);
-    setMsg("Saved!");
-    setTimeout(() => setMsg(""), 2000);
+    setMsg(textErr ? "Saved, but the text support date couldn't be saved (run the text-support SQL in Supabase)" : "Saved!");
+    setTimeout(() => setMsg(""), textErr ? 6000 : 2000);
     onRefresh();
   };
 
@@ -2100,6 +2111,38 @@ function ClientSettings({ client, onRefresh, onDelete }) {
         </p>
         <input style={gStyle.input} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
       </div>
+
+      {/* Text support window — Gentle Start only */}
+      {pkg === "gentle_start" && (() => {
+        const fmt = (d) => d.toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+        const effective = textInfo ? textSupportEnd({ ...textInfo, override: textUntil || null }) : null;
+        const defaultEnd = textInfo && textInfo.firstShareAt ? textSupportEnd({ ...textInfo, override: null }) : null;
+        const open = textInfo ? textSupportOpen({ ...textInfo, override: textUntil || null }) : true;
+        return (
+          <div style={gStyle.card}>
+            <h3 style={{ fontFamily: font.display, color: C.terracotta, margin: "0 0 4px" }}>Text support until</h3>
+            <p style={{ fontSize: 12, color: C.muted, margin: "0 0 12px", lineHeight: 1.5 }}>
+              Gentle Start clients get a 💬 Message button for the first week of their plan, then only ✉️ Email.
+              By default the week is {TEXT_SUPPORT_DAYS} days from when you first shared their sleep plan. Pick a date to extend or end it
+              for this client, or clear it to go back to the default.
+            </p>
+            <input type="date" style={{ ...gStyle.input, maxWidth: 220 }} value={textUntil} onChange={(e) => setTextUntil(e.target.value)} />
+            {textUntil && (
+              <button type="button" onClick={() => setTextUntil("")} style={{ ...gStyle.btnSecondary, marginLeft: 8, padding: "8px 12px", fontSize: 12 }}>Use default</button>
+            )}
+            <p style={{ fontSize: 12, color: C.dark, margin: "12px 0 0", lineHeight: 1.6 }}>
+              {!textInfo ? "Checking…" : !textInfo.firstShareAt && !textUntil
+                ? "The sleep plan hasn't been shared yet, so the 💬 Message button shows. The week starts when you first share it."
+                : <>
+                    {textInfo.firstShareAt && <>Sleep plan first shared {fmt(new Date(textInfo.firstShareAt))}. {defaultEnd && <>Default end: {fmt(defaultEnd)}. </>}</>}
+                    {textUntil && effective && <>Set to end {fmt(effective)}. </>}
+                    <strong>{open ? "💬 Message button is showing" : "💬 Message button is hidden (email only)"}</strong>
+                    {effective && open ? ` until the end of ${fmt(effective)}.` : "."}
+                  </>}
+            </p>
+          </div>
+        );
+      })()}
 
       {/* Package Selection */}
       <div style={gStyle.card}>
@@ -3300,7 +3343,7 @@ function ClientExportPanel({ clients, senseChecks, onClose, onOpenSettings }) {
 }
 
 // ── YOUR PACKAGE (client-facing, no pricing shown) ──────────────────────────
-function YourPackageTab({ clientPackage }) {
+function YourPackageTab({ clientPackage, clientId, defaultName }) {
   if (!clientPackage) {
     return <div style={gStyle.card}>Loading your package details…</div>;
   }
@@ -3338,10 +3381,7 @@ function YourPackageTab({ clientPackage }) {
       </div>
 
       {clientPackage.status === "closed" ? (
-        <p style={{ fontSize: 14, color: C.dark, background: C.goldLight, borderRadius: 8, padding: "12px 14px", margin: 0, lineHeight: 1.6 }}>
-          🧡 Your support period with Chloé has finished. This app is yours to keep: your sleep diary, sleep plan, toolbox and resources
-          will always be here whenever you need them.
-        </p>
+        <ClosedClientNote clientId={clientId} defaultName={defaultName} />
       ) : (<>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: C.muted, marginBottom: 6 }}>
         <span>Day {daysElapsed} of {total}</span>
@@ -3369,6 +3409,7 @@ function ClientApp({ session, onLogout }) {
   const [diaryCount, setDiaryCount] = useState(0);
   const [unreadNotes, refreshUnreadNotes] = useUnreadNotes(session.clientId, false);
   const updateAlerts = useClientUpdateAlerts(session.clientId);
+  const contact = useCoachContact(session.clientId, clientPackage, session.clientName);
   // Bumping a key remounts the Sleep Plan / Toolbox so a client already on the tab can pull in a fresh version
   const [reloadKeys, setReloadKeys] = useState({ plan: 0, toolbox: 0, resources: 0 });
   // Night mode lives here (not inside SleepDiaryViewer) so the header and tab
@@ -3432,6 +3473,7 @@ function ClientApp({ session, onLogout }) {
     hasIntake && clientPackage?.consult_booked &&
     (hasFoundations || hasExtension) && callsRemaining > 0 &&
     clientPackage?.status === "active"; // support closed → no more booking calls
+  const headerButtonCount = contact.count + (clientPackage?.is_app_tester ? 1 : 0) + (checkinUnlocked ? 1 : 0);
 
   return (
     <div style={{ ...gStyle.app, background: T.cream, color: T.dark }}>
@@ -3495,14 +3537,18 @@ function ClientApp({ session, onLogout }) {
               the gap between them lines up with the gap between "Total Nap
               Sleep"/"Tonight's Sleep" etc. below, whether there are 1, 2 or
               3 buttons showing. */}
+          {headerButtonCount > 0 && (
           <div style={{
             display: "grid",
-            gridTemplateColumns: `repeat(${1 + (clientPackage?.is_app_tester ? 1 : 0) + (checkinUnlocked ? 1 : 0)}, 1fr)`,
+            gridTemplateColumns: `repeat(${headerButtonCount}, 1fr)`,
             gap: 10, flex: "1 1 100%", maxWidth: 460, marginLeft: "auto",
           }}>
-            <div style={{ display: "flex", justifyContent: "center" }}>
-              <ContactCoachButton clientId={session.clientId} clientPackage={clientPackage?.package} defaultName={session.clientName} />
-            </div>
+            {contact.showMessage && (
+              <div style={{ display: "flex", justifyContent: "center" }}><ContactMessageButton contact={contact} /></div>
+            )}
+            {contact.showEmail && (
+              <div style={{ display: "flex", justifyContent: "center" }}><ContactEmailButton contact={contact} /></div>
+            )}
             {/* Founding Family feedback button — only visible when is_app_tester is true on this client's record */}
             {clientPackage?.is_app_tester && (
               <div style={{ display: "flex", justifyContent: "center" }}>
@@ -3561,6 +3607,7 @@ function ClientApp({ session, onLogout }) {
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
 
@@ -3572,7 +3619,7 @@ function ClientApp({ session, onLogout }) {
             <NotesToRemember clientId={session.clientId} isCoach={false} onSeen={refreshUnreadNotes} />
           </>
         )}
-        {tab === "package" && <YourPackageTab clientPackage={clientPackage} />}
+        {tab === "package" && <YourPackageTab clientPackage={clientPackage} clientId={session.clientId} defaultName={session.clientName} />}
         {tab === "analysis" && <SleepAnalysis client={{ id: session.clientId, name: session.clientName }} isCoach={false} />}
         {tab === "progress" && <ProgressTab clientId={session.clientId} isCoach={false} />}
         {tab === "plan" && <SleepPlanEditor key={`plan-${reloadKeys.plan}`} clientId={session.clientId} isCoach={false} />}
@@ -4055,71 +4102,146 @@ const FEEDBACK_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfMALaRdK_n1
 const WHATSAPP_NUMBER = "61494730269"; // no + or spaces — required format for wa.me links
 const COACH_EMAIL = "chloe@signsforsleep.com";
 
-// Foundations clients get a "Message Chloé" WhatsApp button; everyone else
-// (Gentle Start, or no package assigned yet) gets an "Email Chloé" button.
-// The "Hi Chloé, this is [name]" greeting only prefills the FIRST time a
-// client ever taps this button — tracked via clients.contact_button_used —
-// since after that they're continuing an existing conversation/thread and
-// don't need to re-introduce themselves.
-function ContactCoachButton({ clientId, clientPackage, defaultName }) {
+// ── Which "contact Chloé" buttons a client sees ─────────────────────────────────────────
+//   Foundations ........ 💬 Message Chloé (WhatsApp), as before
+//   Gentle Start ....... ✉️ Email Chloé, PLUS 💬 Message Chloé for the first week of their plan
+//                        (7 days from when the sleep plan was FIRST shared, or until the date set
+//                        in the client's settings under "Text support until")
+//   No package yet ..... ✉️ Email Chloé, as before
+//   Closed clients ..... neither: they get a note on their Your Package tab with message/email links
+// The "Hi Chloé, this is [name]" greeting only prefills the FIRST time a client ever taps a
+// button — tracked via clients.contact_button_used — since after that they're continuing an
+// existing conversation and don't need to re-introduce themselves.
+const TEXT_SUPPORT_DAYS = 7;
+const endOfLocalDay = (ymd) => {
+  const [y, m, d] = String(ymd).slice(0, 10).split("-").map(Number);
+  return new Date(y, m - 1, d, 23, 59, 59, 999);
+};
+
+// When the sleep plan was first shared, plus any "text support until" date Chloé has set.
+// First share = the earliest saved snapshot of the plan (the plan's own share date is
+// overwritten every time she re-shares, which would restart the week).
+async function loadTextSupportInfo(clientId) {
+  let firstShareAt = null;
+  const { data: plan } = await supabase.from("sleep_plans").select("id, shared_at").eq("client_id", clientId).maybeSingle();
+  if (plan) {
+    const { data: v } = await supabase.from("sleep_plan_versions").select("created_at")
+      .eq("plan_id", plan.id).order("created_at", { ascending: true }).limit(1).maybeSingle();
+    const times = [plan.shared_at, v && v.created_at].filter(Boolean).map((t) => new Date(t).getTime());
+    if (times.length) firstShareAt = new Date(Math.min(...times)).toISOString();
+  }
+  let override = null;
+  // separate query so a missing column can never affect anything else
+  const { data: c, error } = await supabase.from("clients").select("text_support_until").eq("id", clientId).maybeSingle();
+  if (!error && c && c.text_support_until) override = String(c.text_support_until).slice(0, 10);
+  return { firstShareAt, override };
+}
+const textSupportEnd = (info) => info.override
+  ? endOfLocalDay(info.override)
+  : (info.firstShareAt ? new Date(new Date(info.firstShareAt).getTime() + TEXT_SUPPORT_DAYS * 86400000) : null);
+// Open until the end passes. If the plan hasn't been shared yet there's no end, so it's open.
+const textSupportOpen = (info) => { const end = textSupportEnd(info); return !end || Date.now() <= end.getTime(); };
+
+function useCoachContact(clientId, pkgRow, defaultName) {
   const [parentName, setParentName] = useState(null);
   const [alreadyUsed, setAlreadyUsed] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [info, setInfo] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  const [, setClock] = useState(0);
+  const pkg = pkgRow ? (pkgRow.package || null) : null;
 
   useEffect(() => {
+    let cancelled = false;
     const load = async () => {
-      const { data: intakeData } = await supabase.from("intake_responses")
-        .select("parent_name").eq("client_id", clientId).maybeSingle();
-      if (intakeData?.parent_name) setParentName(intakeData.parent_name);
-
-      const { data: clientRow } = await supabase.from("clients")
-        .select("contact_button_used").eq("id", clientId).maybeSingle();
-      setAlreadyUsed(!!clientRow?.contact_button_used);
-      setLoading(false);
+      const { row } = await fetchIntakeRow(clientId);
+      const { data: clientRow } = await supabase.from("clients").select("contact_button_used").eq("id", clientId).maybeSingle();
+      const textInfo = pkg === "gentle_start" ? await loadTextSupportInfo(clientId) : null;
+      if (cancelled) return;
+      if (row && row.parent_name) setParentName(row.parent_name);
+      setAlreadyUsed(!!(clientRow && clientRow.contact_button_used));
+      setInfo(textInfo);
+      setLoaded(true);
     };
     load();
-  }, [clientId]);
+    // re-check when the app comes back into view (the week may have ended, or Chloé may have changed the date)
+    const onVisible = () => { if (!document.hidden) { setClock((n) => n + 1); if (pkg === "gentle_start") loadTextSupportInfo(clientId).then((i) => { if (!cancelled) setInfo(i); }); } };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { cancelled = true; document.removeEventListener("visibilitychange", onVisible); };
+  }, [clientId, pkg]);
 
+  const closed = !!pkgRow && pkgRow.status === "closed";
+  let showMessage = false, showEmail = false;
+  if (pkgRow && loaded && !closed) {
+    if (pkg === "foundations") showMessage = true;
+    else if (pkg === "gentle_start") { showEmail = true; showMessage = info ? textSupportOpen(info) : true; }
+    else showEmail = true;
+  }
+  const name = (parentName || defaultName || "").trim();
   const markUsed = () => {
     if (alreadyUsed) return;
     setAlreadyUsed(true);
     supabase.from("clients").update({ contact_button_used: true }).eq("id", clientId);
   };
-
-  if (loading) return null;
-
-  const name = (parentName || defaultName || "").trim();
-  const greeting = name ? `Hi Chloé, this is ${name}` : "";
-  const btnStyle = {
-    padding: "8px 16px", background: C.terracotta, color: C.white, borderRadius: 8,
-    fontSize: 13, fontWeight: 600, fontFamily: font.body, textDecoration: "none",
-    whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6,
+  return {
+    showMessage, showEmail, count: (showMessage ? 1 : 0) + (showEmail ? 1 : 0),
+    greeting: !alreadyUsed && name ? `Hi Chloé, this is ${name}` : "", markUsed,
   };
+}
 
-  if (clientPackage === "foundations") {
-    // api.whatsapp.com + same-tab (no target="_blank") is documented as more
-    // reliable than wa.me at preserving the prefilled text through the
-    // mobile app handoff — wa.me opening in a new tab first can sometimes
-    // drop the query string when it redirects into the WhatsApp app.
-    const text = !alreadyUsed && greeting ? `&text=${encodeURIComponent(greeting)}` : "";
-    return (
-      <a href={`https://api.whatsapp.com/send?phone=${WHATSAPP_NUMBER}${text}`} onClick={markUsed} style={btnStyle}>
-        💬 Message Chloé
-      </a>
-    );
-  }
-
-  // Gentle Start, or no package assigned yet.
-  // Built by hand with encodeURIComponent (not URLSearchParams) because
-  // URLSearchParams encodes spaces as "+", which mailto: links display
-  // literally instead of treating as a space — encodeURIComponent uses %20,
-  // which every mail client reads correctly.
-  const subject = encodeURIComponent("Weekly check-in email");
-  const bodyParam = !alreadyUsed && greeting ? `&body=${encodeURIComponent(greeting)}` : "";
+const contactBtnStyle = {
+  padding: "8px 16px", background: C.terracotta, color: C.white, borderRadius: 8,
+  fontSize: 13, fontWeight: 600, fontFamily: font.body, textDecoration: "none",
+  whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6,
+};
+function ContactMessageButton({ contact }) {
+  // api.whatsapp.com + same-tab (no target="_blank") is documented as more reliable than wa.me
+  // at preserving the prefilled text through the mobile app handoff.
+  const text = contact.greeting ? `&text=${encodeURIComponent(contact.greeting)}` : "";
   return (
-    <a href={`mailto:${COACH_EMAIL}?subject=${subject}${bodyParam}`} onClick={markUsed} style={btnStyle}>
+    <a href={`https://api.whatsapp.com/send?phone=${WHATSAPP_NUMBER}${text}`} onClick={contact.markUsed} style={contactBtnStyle}>
+      💬 Message Chloé
+    </a>
+  );
+}
+function ContactEmailButton({ contact }) {
+  // Built by hand with encodeURIComponent (not URLSearchParams): URLSearchParams encodes spaces as
+  // "+", which mailto: links show literally. encodeURIComponent uses %20, which every mail client reads.
+  const subject = encodeURIComponent("Weekly check-in email");
+  const bodyParam = contact.greeting ? `&body=${encodeURIComponent(contact.greeting)}` : "";
+  return (
+    <a href={`mailto:${COACH_EMAIL}?subject=${subject}${bodyParam}`} onClick={contact.markUsed} style={contactBtnStyle}>
       ✉️ Email Chloé
     </a>
+  );
+}
+
+// Shown on the Your Package tab once support has been closed (the client keeps the app for life)
+function ClosedClientNote({ clientId, defaultName }) {
+  const [name, setName] = useState((defaultName || "").trim());
+  useEffect(() => {
+    let cancelled = false;
+    fetchIntakeRow(clientId).then(({ row }) => { if (!cancelled && row && row.parent_name) setName(row.parent_name.trim()); });
+    return () => { cancelled = true; };
+  }, [clientId]);
+  const ask = "I'd love to chat about some extra sleep support.";
+  const text = name ? `Hi Chloé, this is ${name}. ${ask}` : `Hi Chloé, ${ask}`;
+  const linkStyle = { color: C.terracotta, fontWeight: 700, textDecoration: "underline" };
+  return (
+    <div style={{ fontSize: 14, color: C.dark, background: C.goldLight, borderRadius: 8, padding: "14px 16px", lineHeight: 1.65 }}>
+      <p style={{ margin: "0 0 12px" }}>
+        🧡 Our support period together has finished, and it's been a privilege to be part of your family's sleep journey.
+        This app is yours to keep: your sleep diary, sleep plan, toolbox and resources will always be here whenever you need them.
+      </p>
+      <p style={{ margin: 0 }}>
+        Sleep moves through seasons as little ones grow, so if you ever feel you need more support, the door is always open to chat
+        about what that might look like. I'm always happy to offer a discount for returning clients, or put together a bespoke package
+        to suit your needs. You're welcome to{" "}
+        <a style={linkStyle} href={`https://api.whatsapp.com/send?phone=${WHATSAPP_NUMBER}&text=${encodeURIComponent(text)}`}>message</a>
+        {" "}or{" "}
+        <a style={linkStyle} href={`mailto:${COACH_EMAIL}?subject=${encodeURIComponent("Chatting about more sleep support")}&body=${encodeURIComponent(text)}`}>email</a>
+        {" "}me to have a chat about what you need.
+      </p>
+    </div>
   );
 }
 
