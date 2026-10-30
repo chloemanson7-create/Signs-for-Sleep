@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "24 Oct 2026 · text support week & returning-client note";
+const APP_BUILD = "25 Oct 2026 · analysis chart scales";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -6344,7 +6344,11 @@ function SleepAnalysis({ client, isCoach }) {
 
   // ── SVG line chart helper ─────────────────────────────────
   const LineChart = ({ data, color, label, yLabel }) => {
-    const valid = data.filter(d => d.value !== null && d.value > 0);
+    // Count charts use a fixed scale starting at zero (a count can't be negative, and zero is a
+    // real value: a night with no wakings should show as 0, not disappear from the line).
+    const FIXED = { naps: { min: 0, max: 10, step: 2 }, wakings: { min: 0, max: 25, step: 5 } }[yLabel] || null;
+    const hasValue = (d) => d.value !== null && d.value !== undefined && (FIXED ? d.value >= 0 : d.value > 0);
+    const valid = data.filter(hasValue);
     if (valid.length < 2) return (
       <div style={{ textAlign: "center", color: C.muted, fontSize: 13, padding: "20px 0" }}>
         Not enough data to show trend
@@ -6354,20 +6358,26 @@ function SleepAnalysis({ client, isCoach }) {
     const minV = Math.min(...valid.map(d => d.value));
     const maxV = Math.max(...valid.map(d => d.value));
     const rangeV = maxV - minV || 60;
+    // Other charts: a little breathing room above and below the data, but never below zero
+    const yMin = FIXED ? FIXED.min : Math.max(0, minV - 15);
+    const ySpan = FIXED ? FIXED.max - FIXED.min : (minV - 15 + rangeV + 30) - yMin;
     const xScale = (i) => PAD.left + (i / (data.length - 1)) * (W - PAD.left - PAD.right);
-    const yScale = (v) => PAD.top + (1 - (v - (minV - 15)) / (rangeV + 30)) * (H - PAD.top - PAD.bottom);
+    const yScale = (v) => {
+      const clamped = FIXED ? Math.min(Math.max(v, FIXED.min), FIXED.max) : v; // keep a stray huge value on the chart
+      return PAD.top + (1 - (clamped - yMin) / ySpan) * (H - PAD.top - PAD.bottom);
+    };
 
     const points = data.map((d, i) => ({
-      x: xScale(i), y: d.value ? yScale(d.value) : null, ...d,
+      x: xScale(i), y: hasValue(d) ? yScale(d.value) : null, ...d,
     }));
     const validPoints = points.filter(p => p.y !== null);
     const pathD = validPoints.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
 
     // Y axis ticks
     const ticks = 4;
-    const tickVals = Array.from({ length: ticks }, (_, i) =>
-      Math.round((minV - 15) + (i / (ticks-1)) * (rangeV + 30))
-    );
+    const tickVals = FIXED
+      ? Array.from({ length: Math.round((FIXED.max - FIXED.min) / FIXED.step) + 1 }, (_, i) => FIXED.min + i * FIXED.step)
+      : Array.from({ length: ticks }, (_, i) => Math.round(yMin + (i / (ticks - 1)) * ySpan));
 
     return (
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", overflow: "visible" }}>
