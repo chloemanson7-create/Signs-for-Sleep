@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "25 Oct 2026 · analysis chart scales";
+const APP_BUILD = "26 Oct 2026 · quick progress log in the diary";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -4895,6 +4895,124 @@ function useDiaryNightMode() {
 // screen (ClientApp / ClientDetail), not this component — the parent also
 // needs isDark to theme its header and tab bar so the whole screen goes
 // dark together, not just this card.
+// ── Quick "log a win / milestone / rough patch" card at the bottom of a diary day ─────────
+// Writes to the same progress_entries table the Progress tab uses, so whatever is logged here
+// shows up in Progress straight away, and the client never has to leave the diary. The entry is
+// dated to the diary day being viewed (so a note about last night, added this morning from
+// yesterday's page, sits on the right day in the Progress timeline).
+const QUICK_LOG_HINTS = {
+  win: "e.g. slept through until 5:30!",
+  milestone: "e.g. first nap in the cot",
+  rough_patch: "e.g. teething, up every hour",
+};
+function DiaryQuickLog({ clientId, date, isCoach, T }) {
+  // (worked out here, not at the top of the file: PROGRESS_TAGS is declared further down)
+  const quickTags = PROGRESS_TAGS.filter((t) => t.key !== "note");
+  const [entries, setEntries] = useState([]);
+  const [tag, setTag] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    const [y, m, d] = date.split("-").map(Number);
+    const from = new Date(y, m - 1, d, 0, 0, 0, 0).toISOString();
+    const to = new Date(y, m - 1, d + 1, 0, 0, 0, 0).toISOString();
+    const { data } = await supabase.from("progress_entries").select("*")
+      .eq("client_id", clientId).gte("created_at", from).lt("created_at", to)
+      .order("created_at", { ascending: false });
+    setEntries(data || []);
+  }, [clientId, date]);
+  useEffect(() => { setTag(""); setNote(""); setMsg(""); load(); }, [load]);
+
+  const add = async () => {
+    if (!tag || saving) return;
+    setSaving(true); setMsg("");
+    const row = { client_id: clientId, author: "client", tag, note: note.trim() || null };
+    if (date !== today()) {
+      const [y, m, d] = date.split("-").map(Number);
+      row.created_at = new Date(y, m - 1, d, 12, 0, 0).toISOString();
+    }
+    const { error } = await supabase.from("progress_entries").insert(row);
+    setSaving(false);
+    if (error) { setMsg("error"); return; }
+    setTag(""); setNote(""); setMsg("added");
+    setTimeout(() => setMsg((cur) => (cur === "added" ? "" : cur)), 4000);
+    load();
+  };
+  const remove = async (entry) => {
+    await supabase.from("progress_entries").delete().eq("id", entry.id);
+    load();
+  };
+
+  if (isCoach && entries.length === 0) return null;
+  const tagOf = (k) => PROGRESS_TAGS.find((t) => t.key === k) || PROGRESS_TAGS[3];
+  return (
+    <div style={{ background: T.white, border: `1px solid ${T.border}`, borderRadius: 12, padding: "14px 18px", marginBottom: 20 }}>
+      <div style={{ fontWeight: 700, fontSize: 13, color: T.dark }}>
+        {isCoach ? "🎉 Progress logged on this day" : "⭐ Log a win, milestone or rough patch"}
+      </div>
+      {!isCoach && (
+        <>
+          <div style={{ fontSize: 11, color: T.muted, marginTop: 2, marginBottom: 10 }}>
+            Adds it to your Progress tab. No need to leave the diary.
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            {quickTags.map((t) => (
+              <button key={t.key} type="button" onClick={() => setTag(tag === t.key ? "" : t.key)} style={{
+                padding: "7px 14px", borderRadius: 20, cursor: "pointer", fontFamily: font.body, fontSize: 13, fontWeight: 600,
+                border: `1.5px solid ${t.color}`, background: tag === t.key ? t.color : "transparent",
+                color: tag === t.key ? "#FFFFFF" : t.color,
+              }}>
+                {t.emoji} {t.label}
+              </button>
+            ))}
+          </div>
+          {tag && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                style={{ ...gStyle.input, flex: 1, background: T.white, borderColor: T.border, color: T.dark }}
+                placeholder={QUICK_LOG_HINTS[tag]}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && add()}
+              />
+              <button type="button" style={{ ...gStyle.btnPrimary, width: "auto", flexShrink: 0 }} onClick={add} disabled={saving}>
+                {saving ? "Adding…" : "+ Add"}
+              </button>
+            </div>
+          )}
+          {msg === "added" && <p style={{ fontSize: 12, color: T.success, margin: "8px 0 0" }}>✓ Added to your Progress tab</p>}
+          {msg === "error" && <p style={{ fontSize: 12, color: T.danger, margin: "8px 0 0" }}>Sorry, that didn't save. Please try again.</p>}
+        </>
+      )}
+      {entries.length > 0 && (
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+          {entries.map((e) => {
+            const t = tagOf(e.tag);
+            const own = isCoach ? e.author === "coach" : e.author === "client";
+            return (
+              <div key={e.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: T.dark }}>
+                <span style={{ color: t.color, fontWeight: 700, flexShrink: 0 }}>{t.emoji} {t.label}</span>
+                <span style={{ flex: 1 }}>
+                  {e.note || ""}
+                  {(isCoach ? e.author === "coach" : e.author === "coach") && (
+                    <span style={{ fontSize: 11, color: T.muted }}> {isCoach ? "· you" : "· from Chloé"}</span>
+                  )}
+                </span>
+                {own && (isCoach || e.author === "client") && (
+                  <button type="button" onClick={() => remove(e)} aria-label="Remove this entry"
+                    style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 15, lineHeight: 1 }}>×</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode, setThemeMode }) {
   const T = isDark ? DARK_C : C;
   const [selectedDate, setSelectedDate] = useState(today());
@@ -5979,6 +6097,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
           placeholder="How was settling? Anything else to note..."
           onChange={(v) => update("notes", v)} disabled={isCoach} />
       </div>
+
+      <DiaryQuickLog clientId={clientId} date={selectedDate} isCoach={isCoach} T={T} />
 
       {/* Exclude this day from analysis — saved on the diary row itself
           (not an ephemeral view-only choice) so it's set right when the
