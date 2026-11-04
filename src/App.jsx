@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "26 Oct 2026 · quick progress log in the diary";
+const APP_BUILD = "3 Nov 2026 · night sleep clarity & progress-log pre-fill";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -4905,14 +4905,30 @@ const QUICK_LOG_HINTS = {
   milestone: "e.g. first nap in the cot",
   rough_patch: "e.g. teething, up every hour",
 };
-function DiaryQuickLog({ clientId, date, isCoach, T }) {
+function DiaryQuickLog({ clientId, date, isCoach, T, night }) {
   // (worked out here, not at the top of the file: PROGRESS_TAGS is declared further down)
   const quickTags = PROGRESS_TAGS.filter((t) => t.key !== "note");
   const [entries, setEntries] = useState([]);
   const [tag, setTag] = useState("");
-  const [note, setNote] = useState("");
+  const [typed, setTyped] = useState(null); // null = the client hasn't edited the note, so show the automatic summary
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+
+  // For a Win or Rough patch the note starts pre-filled from the night, e.g.
+  // "10 wakes (2h 10m awake) · teething, fed to sleep", built from the wakes logged and the day's
+  // General notes. It stays editable, and keeps updating until the client types in the box.
+  const auto = (() => {
+    if (!night || (tag !== "win" && tag !== "rough_patch")) return "";
+    const parts = [];
+    if (night.count !== null) {
+      parts.push(night.count === 0
+        ? "no night wakes"
+        : `${night.count} wake${night.count !== 1 ? "s" : ""}${night.awakeMins > 0 ? ` (${fmtDuration(night.awakeMins)} awake)` : ""}`);
+    }
+    if (night.notes) parts.push(night.notes);
+    return parts.join(" · ");
+  })();
+  const noteValue = typed !== null ? typed : auto;
 
   const load = useCallback(async () => {
     const [y, m, d] = date.split("-").map(Number);
@@ -4923,12 +4939,12 @@ function DiaryQuickLog({ clientId, date, isCoach, T }) {
       .order("created_at", { ascending: false });
     setEntries(data || []);
   }, [clientId, date]);
-  useEffect(() => { setTag(""); setNote(""); setMsg(""); load(); }, [load]);
+  useEffect(() => { setTag(""); setTyped(null); setMsg(""); load(); }, [load]);
 
   const add = async () => {
     if (!tag || saving) return;
     setSaving(true); setMsg("");
-    const row = { client_id: clientId, author: "client", tag, note: note.trim() || null };
+    const row = { client_id: clientId, author: "client", tag, note: noteValue.trim() || null };
     if (date !== today()) {
       const [y, m, d] = date.split("-").map(Number);
       row.created_at = new Date(y, m - 1, d, 12, 0, 0).toISOString();
@@ -4936,7 +4952,7 @@ function DiaryQuickLog({ clientId, date, isCoach, T }) {
     const { error } = await supabase.from("progress_entries").insert(row);
     setSaving(false);
     if (error) { setMsg("error"); return; }
-    setTag(""); setNote(""); setMsg("added");
+    setTag(""); setTyped(null); setMsg("added");
     setTimeout(() => setMsg((cur) => (cur === "added" ? "" : cur)), 4000);
     load();
   };
@@ -4970,12 +4986,12 @@ function DiaryQuickLog({ clientId, date, isCoach, T }) {
           </div>
           {tag && (
             <div style={{ display: "flex", gap: 8 }}>
-              <input
-                style={{ ...gStyle.input, flex: 1, background: T.white, borderColor: T.border, color: T.dark }}
+              <textarea
+                rows={2}
+                style={{ ...gStyle.input, flex: 1, minHeight: 56, resize: "vertical", lineHeight: 1.5, background: T.white, borderColor: T.border, color: T.dark }}
                 placeholder={QUICK_LOG_HINTS[tag]}
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && add()}
+                value={noteValue}
+                onChange={(e) => setTyped(e.target.value)}
               />
               <button type="button" style={{ ...gStyle.btnPrimary, width: "auto", flexShrink: 0 }} onClick={add} disabled={saving}>
                 {saving ? "Adding…" : "+ Add"}
@@ -5525,9 +5541,27 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
   const wakeFlag = implausibleNightDuration(adjTimes.prevBedTime, entry.wake_time, NIGHT_MAX_PLAUSIBLE_MINS);
   const bedFlag = implausibleNightDuration(entry.bed_time, adjTimes.nextWakeTime, NIGHT_MAX_PLAUSIBLE_MINS);
   const nightSleepMins = entry.night_sleep_mins || null;
+  // Night sleep = "Time went to sleep" (this day) → wake time (next day), minus time awake overnight.
+  // ("Time into bed" is just for interest and is never used in the sum.) If it can't be shown, say what's missing.
+  const nightMissingHint = !entry.bed_time
+    ? 'Add "Time went to sleep" above'
+    : !adjTimes.nextWakeTime
+      ? "Shows once tomorrow's wake time is added"
+      : "Check the bedtime and wake time (they look off)";
   const total24h = totalNapMins + (nightSleepMins || 0);
   const wakingMode = entry.night_wakings_mode || "simple";
   const detailedWakingTotals = calcDetailedWakings(entry.night_wakings);
+  // What this night looked like, used to pre-fill the quick progress log ("10 wakes · …")
+  const nightSummary = (() => {
+    let count = null, awakeMins = 0;
+    if (wakingMode === "detailed") {
+      if (detailedWakingTotals.count > 0) { count = detailedWakingTotals.count; awakeMins = detailedWakingTotals.mins; }
+    } else if (entry.night_wakings_count !== "" && entry.night_wakings_count !== null && entry.night_wakings_count !== undefined) {
+      const n = parseInt(entry.night_wakings_count, 10);
+      if (!Number.isNaN(n)) { count = n; awakeMins = parseInt(entry.night_wakings_awake_mins, 10) || 0; }
+    }
+    return { count, awakeMins, notes: (entry.notes || "").trim() };
+  })();
   const bookingUnlocked = !isCoach && !consultBooked && diaryCount >= DIARY_DAYS_REQUIRED;
   const daysRemaining = Math.max(0, DIARY_DAYS_REQUIRED - diaryCount);
 
@@ -5658,7 +5692,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10, marginBottom: 20 }}>
         {[
           { label: "Total nap sleep", value: fmtDuration(totalNapMins) },
-          { label: "Tonight's sleep", value: nightSleepMins ? fmtDuration(nightSleepMins) : "Enter bedtime + tomorrow's wake" },
+          { label: "Tonight's sleep", value: nightSleepMins ? fmtDuration(nightSleepMins) : nightMissingHint },
           { label: "Total sleep (24h)", value: fmtDuration(total24h) },
           { label: "Naps today", value: entry.naps?.filter(n => n.start && n.end).length || 0 },
         ].map((s) => (
@@ -5887,12 +5921,15 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
             <TimeSelect dark={isDark} value={entry.routine_start_time} onChange={(v) => update("routine_start_time", v)} disabled={isCoach} placeholder="Select time…" />
           </div>
           <div>
-            <label style={{ ...gStyle.label, color: T.mid }}>Time into bed</label>
+            <label style={{ ...gStyle.label, color: T.mid }}>Time into bed <span style={{ fontWeight: 400, opacity: 0.75 }}>(optional)</span></label>
             <TimeSelect dark={isDark} value={entry.into_bed_time} onChange={(v) => update("into_bed_time", v)} disabled={isCoach} placeholder="Select time…" />
           </div>
         </div>
         <div style={{ marginBottom: 12 }}>
           <label style={{ ...gStyle.label, color: T.mid }}>Time went to sleep</label>
+          <div style={{ fontSize: 11, color: T.muted, margin: "-2px 0 6px" }}>
+            Night sleep is worked out from this time to tomorrow's wake time, minus time awake overnight.
+          </div>
           <TimeSelect dark={isDark} value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
           {bedFlag && (
             <div style={{
@@ -6098,7 +6135,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
           onChange={(v) => update("notes", v)} disabled={isCoach} />
       </div>
 
-      <DiaryQuickLog clientId={clientId} date={selectedDate} isCoach={isCoach} T={T} />
+      <DiaryQuickLog clientId={clientId} date={selectedDate} isCoach={isCoach} T={T} night={nightSummary} />
 
       {/* Exclude this day from analysis — saved on the diary row itself
           (not an ephemeral view-only choice) so it's set right when the
@@ -6239,7 +6276,9 @@ function SleepAnalysis({ client, isCoach }) {
     const napCount = Array.isArray(e.naps) ? e.naps.filter(n => n.start && n.end).length : 0;
 
     // Option B: backward night sleep calc (prev bed → today wake) for analysis accuracy
-    const prevEntry = idx > 0 ? entries[idx - 1] : null;
+    // The night belongs to the PREVIOUS CALENDAR DAY. (Using "the previous row" would mis-pair
+    // nights whenever a day has no entry, e.g. a client skipped logging for a day.)
+    const prevEntry = entries.find((x) => x.date === offsetDate(e.date, -1)) || null;
     const rawBackwardNightMins = prevEntry?.bed_time && e.wake_time
       ? calcNightSleep(prevEntry.bed_time, e.wake_time)
       : null;
