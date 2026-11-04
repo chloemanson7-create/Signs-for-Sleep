@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "3 Nov 2026 · night sleep clarity & progress-log pre-fill";
+const APP_BUILD = "4 Nov 2026 · night wakes kept inside the night";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -4390,6 +4390,48 @@ const calcDetailedWakings = (wakings) => {
   const mins = complete.reduce((sum, w) => sum + Math.max(0, diffMins(parseTime(w.woke_at), parseTime(w.back_asleep_at))), 0);
   return { count: started.length, open: started.length - complete.length, mins };
 };
+// Awake time that actually falls INSIDE the night: from "Time went to sleep" to the next
+// morning's wake time. A wake that runs past the morning wake time (e.g. started at 6am but only
+// stopped at 9:45pm) is cut off at the wake time, and one that starts outside the night isn't
+// counted at all, so a forgotten "back asleep" time can no longer wipe out the whole night.
+// Wakes with no "back asleep" time still add nothing (as before). When the night's window isn't
+// known yet (no bedtime or no next-morning wake time) this falls back to the plain total.
+// Returns index lists (into `wakings`) for open / overran / outside so the diary can flag them.
+const calcNightAwake = (wakings, bedTime, nextWakeTime) => {
+  const list = Array.isArray(wakings) ? wakings : [];
+  const bed = parseTime(bedTime ? String(bedTime).slice(0, 5) : null);
+  const wake = parseTime(nextWakeTime ? String(nextWakeTime).slice(0, 5) : null);
+  const out = { mins: 0, windowKnown: false, nightLen: null, open: [], overran: [], outside: [] };
+  if (bed === null || wake === null) {
+    out.mins = calcDetailedWakings(list).mins;
+    return out;
+  }
+  let nightLen = diffMins(bed, wake);
+  if (nightLen === 0) nightLen = 1440;
+  out.windowKnown = true;
+  out.nightLen = nightLen;
+  list.forEach((w, idx) => {
+    if (!w || !w.woke_at) return;
+    const startOff = diffMins(bed, parseTime(w.woke_at));
+    if (startOff >= nightLen) { out.outside.push(idx); return; }      // starts after the morning wake (or before bedtime)
+    if (!w.back_asleep_at) { out.open.push(idx); return; }            // never stopped: adds no awake time
+    const dur = Math.max(0, diffMins(parseTime(w.woke_at), parseTime(w.back_asleep_at)));
+    if (startOff + dur > nightLen) out.overran.push(idx);
+    out.mins += Math.min(startOff + dur, nightLen) - startOff;
+  });
+  return out;
+};
+// Night sleep for one night, from that day's row and the NEXT morning's wake time:
+// "Time went to sleep" -> wake time, minus awake time inside the night. Never uses "Time into bed".
+// Returns null for night when it can't be worked out (so a missing value is never saved as 0).
+const nightFigures = (row, nextWakeTime) => {
+  const raw = calcNightSleep(row.bed_time, nextWakeTime);
+  const awake = row.night_wakings_mode === "detailed"
+    ? calcNightAwake(row.night_wakings, row.bed_time, nextWakeTime).mins
+    : (parseInt(row.night_wakings_awake_mins) || 0);
+  const night = raw !== null && raw - awake > 0 ? raw - awake : null;
+  return { awake, night, total: (row.total_nap_mins || 0) + (night || 0) };
+};
 const emptyEntry = () => ({
   wake_time: "", bed_time: "", notes: "",
   routine_start_time: "", into_bed_time: "", asleep_time: "",
@@ -5057,7 +5099,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
   // Neighbouring days' bed/wake times — lets an AM/PM slip on either side of
   // a night's sleep be flagged the moment the pairing is complete, whichever
   // day that happens to be entered on.
-  const [adjTimes, setAdjTimes] = useState({ prevBedTime: null, nextWakeTime: null });
+  const [adjTimes, setAdjTimes] = useState({ prevBedTime: null, nextWakeTime: null, prevWakings: [], prevWakingsMode: "simple" });
   // Ranked "most used first" answers per question, built from this client's
   // own diary history — powers the autosuggest dropdowns below.
   const [suggestionPools, setSuggestionPools] = useState(emptySuggestionPools);
@@ -5112,7 +5154,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
       // Also grab yesterday's bed_time and tomorrow's wake_time (if logged) so
       // the night-duration warning can catch an AM/PM slip on either side.
       const [{ data: prevDay }, { data: nextDay }] = await Promise.all([
-        supabase.from("sleep_diary").select("bed_time")
+        supabase.from("sleep_diary").select("bed_time, night_wakings, night_wakings_mode")
           .eq("client_id", clientId).eq("date", offsetDate(selectedDate, -1)).maybeSingle(),
         supabase.from("sleep_diary").select("wake_time")
           .eq("client_id", clientId).eq("date", offsetDate(selectedDate, +1)).maybeSingle(),
@@ -5124,6 +5166,8 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
         setAdjTimes({
           prevBedTime: prevDay?.bed_time ? prevDay.bed_time.slice(0, 5) : null,
           nextWakeTime: nextDay?.wake_time ? nextDay.wake_time.slice(0, 5) : null,
+          prevWakings: Array.isArray(prevDay?.night_wakings) ? prevDay.night_wakings : [],
+          prevWakingsMode: prevDay?.night_wakings_mode || "simple",
         });
         setLoading(false);
       }
@@ -5245,13 +5289,14 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
       .eq("client_id", clientId).eq("date", nextDateStr).maybeSingle();
 
     const tomorrowWake = nextEntry?.wake_time ? nextEntry.wake_time.slice(0, 5) : null;
-    const rawNightSleep = calcNightSleep(rest.bed_time, tomorrowWake);
     const wakingMode = rest.night_wakings_mode || "simple";
     const detailed = wakingMode === "detailed" ? calcDetailedWakings(rest.night_wakings) : null;
-    const awakeMins = detailed ? detailed.mins : (parseInt(rest.night_wakings_awake_mins) || 0);
     const wakingsCount = detailed ? detailed.count : (rest.night_wakings_count || null);
-    const nightSleep = rawNightSleep !== null ? Math.max(0, rawNightSleep - awakeMins) : null;
-    const total24h = totalNapMins + (nightSleep || 0);
+    // Awake time is counted only inside the night (bedtime -> tomorrow's wake); see calcNightAwake.
+    const fig = nightFigures({ ...rest, night_wakings_mode: wakingMode, total_nap_mins: totalNapMins }, tomorrowWake);
+    const awakeMins = fig.awake;
+    const nightSleep = fig.night;
+    const total24h = fig.total;
 
     // Step 2: Build and save today's payload
     const payload = {
@@ -5290,17 +5335,14 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
     // Because yesterday's night = yesterday bed → today wake
     const prevDateStr = offsetDate(date, -1);
     const { data: prevEntry } = await supabase
-      .from("sleep_diary").select("id, bed_time, total_nap_mins, night_wakings_awake_mins")
+      .from("sleep_diary").select("id, bed_time, total_nap_mins, night_wakings_awake_mins, night_wakings, night_wakings_mode")
       .eq("client_id", clientId).eq("date", prevDateStr).maybeSingle();
     if (prevEntry?.id && prevEntry.bed_time) {
-      const rawPrevNightSleep = calcNightSleep(prevEntry.bed_time, rest.wake_time);
-      const prevAwakeMins = parseInt(prevEntry.night_wakings_awake_mins) || 0;
-      const prevNightSleep = rawPrevNightSleep !== null ? Math.max(0, rawPrevNightSleep - prevAwakeMins) : null;
-      const prevTotal = (prevEntry.total_nap_mins || 0) + (prevNightSleep || 0);
-      await supabase.from("sleep_diary").update({
-        night_sleep_mins: prevNightSleep,
-        total_sleep_24h: prevTotal,
-      }).eq("id", prevEntry.id);
+      const prevFig = nightFigures(prevEntry, rest.wake_time);
+      const prevUpdate = { night_sleep_mins: prevFig.night, total_sleep_24h: prevFig.total };
+      // Detailed wakes: keep the stored "time awake overnight" in line with what's counted inside the night
+      if (prevEntry.night_wakings_mode === "detailed") prevUpdate.night_wakings_awake_mins = prevFig.awake || null;
+      await supabase.from("sleep_diary").update(prevUpdate).eq("id", prevEntry.id);
     }
 
 
@@ -5383,6 +5425,29 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
     await supabase.from("sleep_diary").update({ wake_time: newValue }).eq("id", nextEntry.id);
     setAdjTimes(prev => ({ ...prev, nextWakeTime: newValue }));
     await doSave(entry, selectedDate);
+  };
+
+  // Last night's wake was started but never stopped, and this morning's wake time is now in:
+  // close it at the morning wake time (applied to yesterday's row, then its night sleep is recalculated).
+  const closePrevOpenWakes = async () => {
+    if (!entry.wake_time) return;
+    const wakeHHMM = String(entry.wake_time).slice(0, 5);
+    const { data: prev } = await supabase
+      .from("sleep_diary").select("id, bed_time, total_nap_mins, night_wakings_awake_mins, night_wakings, night_wakings_mode")
+      .eq("client_id", clientId).eq("date", offsetDate(selectedDate, -1)).maybeSingle();
+    if (!prev?.id || !Array.isArray(prev.night_wakings)) return;
+    const openIdx = new Set(calcNightAwake(prev.night_wakings, prev.bed_time, wakeHHMM).open);
+    if (openIdx.size === 0) return;
+    const wakings = prev.night_wakings.map((w, i) => openIdx.has(i) ? { ...w, back_asleep_at: wakeHHMM } : w);
+    const fig = nightFigures({ ...prev, night_wakings: wakings }, wakeHHMM);
+    const { error } = await supabase.from("sleep_diary").update({
+      night_wakings: wakings,
+      night_wakings_awake_mins: fig.awake || null,
+      night_sleep_mins: fig.night,
+      total_sleep_24h: fig.total,
+    }).eq("id", prev.id);
+    if (error) { console.error("Close open wake error:", error); return; }
+    setAdjTimes(p => ({ ...p, prevWakings: wakings }));
   };
 
   const updateNap = async (idx, field, value) => {
@@ -5541,13 +5606,28 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
   const wakeFlag = implausibleNightDuration(adjTimes.prevBedTime, entry.wake_time, NIGHT_MAX_PLAUSIBLE_MINS);
   const bedFlag = implausibleNightDuration(entry.bed_time, adjTimes.nextWakeTime, NIGHT_MAX_PLAUSIBLE_MINS);
   const nightSleepMins = entry.night_sleep_mins || null;
+  // Which night wakes look wrong for THIS night (bedtime -> tomorrow's wake)? Only meaningful once the
+  // morning wake time is in. Used for the "Tonight's sleep" note and for the one-tap fixes.
+  const nightAwake = (entry.night_wakings_mode === "detailed")
+    ? calcNightAwake(entry.night_wakings, entry.bed_time, adjTimes.nextWakeTime)
+    : null;
+  const wakeProblems = nightAwake && nightAwake.windowKnown
+    ? { open: nightAwake.open, overran: nightAwake.overran, outside: nightAwake.outside }
+    : { open: [], overran: [], outside: [] };
+  const hasWakeProblem = wakeProblems.open.length + wakeProblems.overran.length + wakeProblems.outside.length > 0;
+  // Yesterday's night wakes still open now that THIS morning's wake time is in (shown under Morning Wake)
+  const prevOpenWakes = (adjTimes.prevWakingsMode === "detailed" && entry.wake_time && adjTimes.prevBedTime)
+    ? calcNightAwake(adjTimes.prevWakings, adjTimes.prevBedTime, entry.wake_time).open.map((i) => adjTimes.prevWakings[i])
+    : [];
   // Night sleep = "Time went to sleep" (this day) → wake time (next day), minus time awake overnight.
   // ("Time into bed" is just for interest and is never used in the sum.) If it can't be shown, say what's missing.
   const nightMissingHint = !entry.bed_time
     ? 'Add "Time went to sleep" above'
     : !adjTimes.nextWakeTime
       ? "Shows once tomorrow's wake time is added"
-      : "Check the bedtime and wake time (they look off)";
+      : hasWakeProblem
+        ? "Check the night wakes below"
+        : "Check the bedtime and wake time (they look off)";
   const total24h = totalNapMins + (nightSleepMins || 0);
   const wakingMode = entry.night_wakings_mode || "simple";
   const detailedWakingTotals = calcDetailedWakings(entry.night_wakings);
@@ -5555,7 +5635,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
   const nightSummary = (() => {
     let count = null, awakeMins = 0;
     if (wakingMode === "detailed") {
-      if (detailedWakingTotals.count > 0) { count = detailedWakingTotals.count; awakeMins = detailedWakingTotals.mins; }
+      if (detailedWakingTotals.count > 0) { count = detailedWakingTotals.count; awakeMins = nightAwake && nightAwake.windowKnown ? nightAwake.mins : detailedWakingTotals.mins; }
     } else if (entry.night_wakings_count !== "" && entry.night_wakings_count !== null && entry.night_wakings_count !== undefined) {
       const n = parseInt(entry.night_wakings_count, 10);
       if (!Number.isNaN(n)) { count = n; awakeMins = parseInt(entry.night_wakings_awake_mins, 10) || 0; }
@@ -5703,6 +5783,46 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
         ))}
       </div>
 
+      {/* Night wakes that look wrong for this night (never stopped / run past the morning wake / outside the night) */}
+      {hasWakeProblem && (
+        <div style={{
+          background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
+          padding: "10px 12px", marginTop: -8, marginBottom: 20, fontSize: 12.5, color: "#6B4A1F", lineHeight: 1.45,
+        }}>
+          <strong>⚠️ A night wake looks off, so check its "back asleep" time.</strong>
+          <div style={{ marginTop: 4 }}>
+            Only awake time between "Time went to sleep" and the morning wake time ({to12hLabel(adjTimes.nextWakeTime)}) counts toward the night.
+          </div>
+          {wakeProblems.open.map((i) => (
+            <div key={`o${i}`} style={{ marginTop: 8 }}>
+              Waking {i + 1} started at <strong>{to12hLabel(entry.night_wakings[i].woke_at)}</strong> but was never stopped.
+              {!isCoach && (
+                <button type="button" onClick={() => updateWaking(i, "back_asleep_at", adjTimes.nextWakeTime)}
+                  style={{ display: "block", marginTop: 6, padding: "6px 12px", borderRadius: 7, border: "1px solid #C4714A", background: "#C4714A", color: "#FFFFFF", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font.body }}>
+                  Close it at {to12hLabel(adjTimes.nextWakeTime)}
+                </button>
+              )}
+            </div>
+          ))}
+          {wakeProblems.overran.map((i) => (
+            <div key={`r${i}`} style={{ marginTop: 8 }}>
+              Waking {i + 1} ends at <strong>{to12hLabel(entry.night_wakings[i].back_asleep_at)}</strong>, after the morning wake time. Only the time up to {to12hLabel(adjTimes.nextWakeTime)} is counted.
+              {!isCoach && (
+                <button type="button" onClick={() => updateWaking(i, "back_asleep_at", adjTimes.nextWakeTime)}
+                  style={{ display: "block", marginTop: 6, padding: "6px 12px", borderRadius: 7, border: "1px solid #C4714A", background: "#C4714A", color: "#FFFFFF", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font.body }}>
+                  End it at {to12hLabel(adjTimes.nextWakeTime)}
+                </button>
+              )}
+            </div>
+          ))}
+          {wakeProblems.outside.map((i) => (
+            <div key={`x${i}`} style={{ marginTop: 8 }}>
+              Waking {i + 1} started at <strong>{to12hLabel(entry.night_wakings[i].woke_at)}</strong>, outside this night, so it isn't counted in night sleep.
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Wake time */}
       <div style={{ ...gStyle.card, background: T.white, borderColor: T.border }}>
         <h3 style={{ fontFamily: font.display, color: T.blue, margin: "0 0 4px" }}>Morning Wake</h3>
@@ -5733,6 +5853,26 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
                   fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font.body,
                 }}>
                 Change {wakeFlag.suggestion.fixField === "end" ? "wake time" : "yesterday's bedtime"} to {to12hLabel(wakeFlag.suggestion.fixValue)}
+              </button>
+            )}
+          </div>
+        )}
+        {prevOpenWakes.length > 0 && (
+          <div style={{
+            background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
+            padding: "10px 12px", marginTop: 10, fontSize: 12.5, color: "#6B4A1F", lineHeight: 1.45,
+          }}>
+            <strong>⏰ A night wake from last night was never stopped.</strong>
+            <div style={{ marginTop: 4 }}>
+              {prevOpenWakes.length === 1
+                ? <>It started at {to12hLabel(prevOpenWakes[0].woke_at)}.</>
+                : <>{prevOpenWakes.length} wakes were left running.</>}
+              {" "}If they were awake until this morning, close {prevOpenWakes.length === 1 ? "it" : "them"} at {to12hLabel(entry.wake_time)}. If they went back to sleep earlier, set that time on yesterday's diary instead.
+            </div>
+            {!isCoach && (
+              <button type="button" onClick={closePrevOpenWakes}
+                style={{ marginTop: 8, padding: "6px 12px", borderRadius: 7, border: "1px solid #C4714A", background: "#C4714A", color: "#FFFFFF", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: font.body }}>
+                Close at {to12hLabel(entry.wake_time)}
               </button>
             )}
           </div>
@@ -6283,9 +6423,14 @@ function SleepAnalysis({ client, isCoach }) {
       ? calcNightSleep(prevEntry.bed_time, e.wake_time)
       : null;
     // The "awake overnight" duration is logged on the night it belongs to (prevEntry's date)
-    const prevAwakeMins = prevEntry ? (parseInt(prevEntry.night_wakings_awake_mins) || 0) : 0;
-    const backwardNightMins = rawBackwardNightMins !== null
-      ? Math.max(0, rawBackwardNightMins - prevAwakeMins)
+    // Detailed wakes are counted only inside the night (see calcNightAwake), so a wake that was never
+    // stopped can't swallow the whole night. A night that works out to nothing is treated as missing, not 0.
+    const prevAwakeMins = !prevEntry ? 0
+      : prevEntry.night_wakings_mode === "detailed"
+        ? calcNightAwake(prevEntry.night_wakings, prevEntry.bed_time, e.wake_time).mins
+        : (parseInt(prevEntry.night_wakings_awake_mins) || 0);
+    const backwardNightMins = rawBackwardNightMins !== null && rawBackwardNightMins - prevAwakeMins > 0
+      ? rawBackwardNightMins - prevAwakeMins
       : null;
 
     // Option D: only include total if we have BOTH nap and night data
