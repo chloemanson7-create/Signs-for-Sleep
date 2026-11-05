@@ -7188,18 +7188,45 @@ const DEFAULT_SECTIONS = [
   { key: "additional_notes",  title: "Additional Notes" },
 ];
 
+// Strips a section down to just what's stored (no ids / local fields)
+const cleanPlanSections = (secs) => secs.map((s, i) => ({
+  section_key: s.section_key || null,
+  title: s.title || "",
+  content: s.content || "",
+  sort_order: i,
+}));
+const samePlanContent = (a, b) => JSON.stringify(cleanPlanSections(a || [])) === JSON.stringify(cleanPlanSections(b || []));
+
+// How it works (coach side):
+//  • Typing auto-saves to a private DRAFT (sleep_plans.draft_sections). The client never sees it.
+//  • "Save & share this version" publishes the draft to sleep_plan_sections (what the client reads),
+//    stores a History snapshot and triggers the client's "Updated" bell.
+//  • Autosave never rewrites the text boxes from the database, so the cursor can't jump or lose words.
 function SleepPlanEditor({ clientId, clientData, isCoach }) {
   const [plan, setPlan]         = useState(null);
   const [sections, setSections] = useState([]);
+  const [publishedSections, setPublishedSections] = useState([]); // rows the client currently sees
   const [saving, setSaving]     = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishMsg, setPublishMsg] = useState("");
   const [loading, setLoading]   = useState(true);
   const [versions, setVersions] = useState([]);
   const [showVersions, setShowVersions] = useState(false);
   const [viewingVersion, setViewingVersion] = useState(null);
   const [childName, setChildName] = useState("");
   const [iosHelpOpen, setIosHelpOpen] = useState(false);
-  const saveTimer = useRef(null);
+  const saveTimer    = useRef(null);
+  const sectionsRef  = useRef([]);   // always the latest text, even between renders
+  const planRef      = useRef(null);
+  const savingRef    = useRef(false);
+  const queuedRef    = useRef(false);
+  const pendingRef   = useRef(false); // typed something that hasn't reached the database yet
+  const savedMsgTimer = useRef(null);
+
+  const applySections = (secs) => { sectionsRef.current = secs; setSections(secs); };
+  const applyPlan = (p) => { planRef.current = p; setPlan(p); };
 
   // Load child name from intake
   useEffect(() => {
@@ -7210,29 +7237,43 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
 
   // Load plan and sections
   useEffect(() => {
+    let cancelled = false;
     const load = async () => {
       setLoading(true);
+      // The client only needs the published columns; the coach also gets the private draft.
       const { data: planData } = await supabase
-        .from("sleep_plans").select("*")
+        .from("sleep_plans").select(isCoach ? "*" : "id, client_id, shared, shared_at")
         .eq("client_id", clientId).maybeSingle();
+      if (cancelled) return;
 
       if (planData) {
-        setPlan(planData);
+        applyPlan(planData);
         const { data: secData } = await supabase
           .from("sleep_plan_sections").select("*")
           .eq("plan_id", planData.id)
           .order("sort_order", { ascending: true });
-        setSections(secData || []);
+        if (cancelled) return;
+        const published = secData || [];
+        setPublishedSections(published);
+        if (isCoach && Array.isArray(planData.draft_sections)) {
+          // Coach picks up exactly where they left off
+          applySections(planData.draft_sections.map((s, i) => ({ ...s, sort_order: i })));
+        } else if (published.length) {
+          applySections(published);
+        } else if (isCoach) {
+          applySections(DEFAULT_SECTIONS.map((s, i) => ({
+            section_key: s.key, title: s.title, content: "", sort_order: i,
+          })));
+        }
         // Load versions
         const { data: verData } = await supabase
           .from("sleep_plan_versions").select("*")
           .eq("plan_id", planData.id)
           .order("created_at", { ascending: false });
-        setVersions(verData || []);
+        if (!cancelled) setVersions(verData || []);
       } else if (isCoach) {
         // Initialise with default sections for coach
-        setSections(DEFAULT_SECTIONS.map((s, i) => ({
-          id: null, plan_id: null,
+        applySections(DEFAULT_SECTIONS.map((s, i) => ({
           section_key: s.key, title: s.title,
           content: "", sort_order: i,
         })));
@@ -7240,101 +7281,169 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
       setLoading(false);
     };
     load();
+    return () => { cancelled = true; };
   }, [clientId, isCoach]);
 
-  // Save plan to Supabase
-  const savePlan = async (secs, opts = {}) => {
+  // Makes sure a plan row exists and returns its id
+  const ensurePlanId = async () => {
+    if (planRef.current?.id) return planRef.current.id;
+    const { data: newPlan } = await supabase
+      .from("sleep_plans")
+      .insert({ client_id: clientId, shared: false })
+      .select("*").maybeSingle();
+    if (newPlan) { applyPlan(newPlan); return newPlan.id; }
+    return null;
+  };
+
+  // Autosave: writes the private draft only. One save at a time; if more typing arrives
+  // while a save is running, it saves again straight afterwards with the newest text.
+  // It never writes back into the text boxes, which is what used to make the cursor jump.
+  const persistDraft = async () => {
+    if (savingRef.current) { queuedRef.current = true; return; }
+    savingRef.current = true;
     setSaving(true);
-    let planId = plan?.id;
-
-    // Create plan row if it doesn't exist
-    if (!planId) {
-      const { data: newPlan } = await supabase
-        .from("sleep_plans")
-        .insert({ client_id: clientId, shared: false })
-        .select("*").maybeSingle();
-      if (newPlan) { setPlan(newPlan); planId = newPlan.id; }
+    try {
+      do {
+        queuedRef.current = false;
+        pendingRef.current = false;
+        const secs = cleanPlanSections(sectionsRef.current);
+        const planId = await ensurePlanId();
+        if (!planId) throw new Error("no plan row");
+        const draftAt = new Date().toISOString();
+        const { error } = await supabase.from("sleep_plans")
+          .update({ draft_sections: secs, draft_updated_at: draftAt }).eq("id", planId);
+        if (error) throw error;
+        planRef.current = { ...planRef.current, draft_sections: secs, draft_updated_at: draftAt };
+      } while (queuedRef.current);
+      setSaveError(false);
+      setSavedMsg(true);
+      clearTimeout(savedMsgTimer.current);
+      savedMsgTimer.current = setTimeout(() => setSavedMsg(false), 2000);
+    } catch (e) {
+      console.error("Sleep plan draft save failed", e);
+      pendingRef.current = true;
+      setSaveError(true);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
-    if (!planId) { setSaving(false); return; }
+  };
 
-    // Upsert all sections
-    const toSave = secs.map((s, i) => ({
-      plan_id: planId,
-      section_key: s.section_key || null,
-      title: s.title,
-      content: s.content || "",
-      sort_order: i,
-    }));
+  const scheduleSave = () => {
+    pendingRef.current = true;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(persistDraft, 1200);
+  };
 
-    // Delete existing sections and reinsert (simplest way to handle reorder/delete)
-    await supabase.from("sleep_plan_sections").delete().eq("plan_id", planId);
-    const { data: savedSecs } = await supabase
-      .from("sleep_plan_sections").insert(toSave).select("*");
-    if (savedSecs) setSections(savedSecs.sort((a,b) => a.sort_order - b.sort_order));
+  // Don't lose typing if she switches tab / closes the page / leaves the plan
+  useEffect(() => {
+    if (!isCoach) return undefined;
+    const flush = () => {
+      if (pendingRef.current) { clearTimeout(saveTimer.current); persistDraft(); }
+    };
+    const onHide = () => { if (document.hidden) flush(); };
+    const onBeforeUnload = (e) => {
+      if (pendingRef.current || savingRef.current) { flush(); e.preventDefault(); e.returnValue = ""; }
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      flush();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCoach, clientId]);
 
-    // If sharing for first time or updating shared plan, save version snapshot
-    if (opts.share || (plan?.shared && !opts.unshare)) {
+  const handleSectionChange = (idx, field, value) => {
+    const updated = sectionsRef.current.map((s, i) => i === idx ? { ...s, [field]: value } : s);
+    applySections(updated);
+    scheduleSave();
+  };
+
+  const addCustomSection = () => {
+    applySections([...sectionsRef.current, {
+      section_key: null, title: "Custom Section",
+      content: "", sort_order: sectionsRef.current.length,
+    }]);
+    scheduleSave();
+  };
+
+  const removeSection = (idx) => {
+    applySections(sectionsRef.current.filter((_, i) => i !== idx));
+    scheduleSave();
+  };
+
+  // Publish the current draft: this is the moment the client sees it.
+  const publishPlan = async () => {
+    if (publishing) return;
+    setPublishing(true);
+    setPublishMsg("");
+    clearTimeout(saveTimer.current);
+    try {
+      // Let any save already in flight finish first so nothing overwrites the publish
+      let guard = 0;
+      while (savingRef.current && guard++ < 50) await new Promise(r => setTimeout(r, 100));
+
+      const planId = await ensurePlanId();
+      if (!planId) throw new Error("Couldn't create the plan");
+      const secs = cleanPlanSections(sectionsRef.current);
+      const wasShared = !!planRef.current?.shared;
+
+      // 1) Add the new published sections, 2) remove the old ones — so the client
+      //    is never left looking at an empty plan if something goes wrong midway.
+      const oldIds = publishedSections.map(r => r.id).filter(Boolean);
+      const { data: savedSecs, error: insErr } = await supabase
+        .from("sleep_plan_sections")
+        .insert(secs.map(s => ({ ...s, plan_id: planId }))).select("*");
+      if (insErr || !savedSecs) throw insErr || new Error("Couldn't save sections");
+      if (oldIds.length) await supabase.from("sleep_plan_sections").delete().in("id", oldIds);
+      setPublishedSections(savedSecs.sort((a, b) => a.sort_order - b.sort_order));
+
+      // History snapshot — its time is what triggers the client's "Updated" bell
       await supabase.from("sleep_plan_versions").insert({
         plan_id: planId,
-        snapshot: toSave,
+        snapshot: secs.map(s => ({ ...s, plan_id: planId })),
       });
-      // Reload versions
       const { data: verData } = await supabase
         .from("sleep_plan_versions").select("*")
         .eq("plan_id", planId)
         .order("created_at", { ascending: false });
       setVersions(verData || []);
+
+      const nowIso = new Date().toISOString();
+      const update = { shared: true, draft_sections: secs, draft_updated_at: nowIso };
+      // "Shared on" date only moves when she shares it (again) after it was hidden, not on every revision
+      if (!wasShared) update.shared_at = nowIso;
+      const { error: upErr } = await supabase.from("sleep_plans").update(update).eq("id", planId);
+      if (upErr) throw upErr;
+      applyPlan({ ...planRef.current, ...update });
+      pendingRef.current = false;
+
+      setPublishMsg(wasShared ? "✓ Shared. The client now sees this version." : "✓ Shared with client. They'll see a notification next time they open the app.");
+      setTimeout(() => setPublishMsg(""), 6000);
+    } catch (e) {
+      console.error("Publish failed", e);
+      alert("Sorry, that didn't go through, so the client has NOT been sent this version. Your draft is still saved. Please try again.");
     }
-
-    // Update shared status if needed
-    if (opts.share !== undefined) {
-      const update = { shared: opts.share };
-      if (opts.share) update.shared_at = new Date().toISOString();
-      await supabase.from("sleep_plans").update(update).eq("id", planId);
-      setPlan(prev => ({ ...prev, ...update, shared: opts.share }));
-    }
-
-    // (Editing a plan the client can already see saves a version snapshot above;
-    // that snapshot's time is what triggers the "Updated" bell on their Sleep Plan tab.)
-
-    setSaving(false);
-    setSavedMsg(true);
-    setTimeout(() => setSavedMsg(false), 2000);
+    setPublishing(false);
   };
 
-  // Debounced auto-save
-  const handleSectionChange = (idx, field, value) => {
-    const updated = sections.map((s, i) => i === idx ? { ...s, [field]: value } : s);
-    setSections(updated);
+  // Throw away unshared edits and go back to what the client currently sees
+  const discardDraft = async () => {
+    if (!publishedSections.length) return;
+    if (!window.confirm("Discard your unshared changes and go back to the version the client can see?")) return;
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => savePlan(updated), 1500);
-  };
-
-  const addCustomSection = () => {
-    const updated = [...sections, {
-      id: null, plan_id: plan?.id || null,
-      section_key: null, title: "Custom Section",
-      content: "", sort_order: sections.length,
-    }];
-    setSections(updated);
-  };
-
-  const removeSection = (idx) => {
-    const updated = sections.filter((_, i) => i !== idx);
-    setSections(updated);
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => savePlan(updated), 1500);
-  };
-
-  const sharePlan = async () => {
-    await savePlan(sections, { share: true });
-    // Notify client via in-app flag on plan
-    alert("Sleep plan shared with client! They will see a notification next time they log in.");
+    const back = publishedSections.map((s, i) => ({
+      section_key: s.section_key || null, title: s.title, content: s.content || "", sort_order: i,
+    }));
+    applySections(back);
+    await persistDraft();
   };
 
   const unshare = async () => {
     await supabase.from("sleep_plans").update({ shared: false }).eq("id", plan.id);
-    setPlan(prev => ({ ...prev, shared: false }));
+    applyPlan({ ...planRef.current, shared: false });
   };
 
   const printPlan = () => printOrGuide(setIosHelpOpen);
@@ -7446,6 +7555,7 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
 
   // Coach view — full editor
   const filledCount = sections.filter(s => s.content && s.content.trim()).length;
+  const hasUnshared = !!plan?.shared && !samePlanContent(sections, publishedSections);
 
   return (
     <div>
@@ -7455,8 +7565,10 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
           <h2 style={{ fontFamily: font.display, fontSize: 22, color: C.terracotta, margin: 0 }}>
             {childName ? `Sleep Plan for ${childName}` : "Sleep Plan"}
           </h2>
-          <p style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
-            {filledCount} of {sections.length} sections filled · {saving ? "Saving…" : savedMsg ? "✓ Saved" : "Auto-saves as you type"}
+          <p style={{ fontSize: 12, color: saveError ? C.danger : C.muted, marginTop: 4 }}>
+            {filledCount} of {sections.length} sections filled · {saveError
+              ? "⚠ Couldn't save your draft. Keep this page open; it will retry as you type"
+              : saving ? "Saving draft…" : savedMsg ? "✓ Draft saved" : "Draft auto-saves as you type"}
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -7466,25 +7578,47 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
             </button>
           )}
           <button style={gStyle.btnGold} onClick={printPlan}>🖨 Print / PDF</button>
-          {plan?.shared ? (
+          {plan?.shared && (
             <button style={gStyle.btnDanger} onClick={unshare}>Unshare from client</button>
+          )}
+          {!plan?.shared ? (
+            <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={publishPlan} disabled={publishing}>
+              {publishing ? "Sharing…" : "Share with client"}
+            </button>
           ) : (
-            <button style={{ ...gStyle.btnPrimary, width: "auto" }} onClick={sharePlan}>
-              Share with client
+            <button
+              style={{ ...gStyle.btnPrimary, width: "auto", opacity: hasUnshared ? 1 : 0.5 }}
+              onClick={publishPlan} disabled={publishing || !hasUnshared}>
+              {publishing ? "Sharing…" : "Save & share this version"}
             </button>
           )}
         </div>
       </div>
 
-      {/* Shared status banner */}
-      {plan?.shared && (
+      {/* Status banner: what does the client see right now? */}
+      {plan?.shared && hasUnshared ? (
+        <div style={{ background: "#FFF4DC", border: `1px solid ${C.gold}`, borderRadius: 10, padding: "10px 16px",
+          marginBottom: 20, fontSize: 13, color: C.dark, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <span>✏️ You have changes the client can't see yet. Take your time — they only see the last version you shared{plan.shared_at ? ` (first shared ${new Date(plan.shared_at).toLocaleDateString("en-AU")})` : ""}.</span>
+          <button style={{ ...gStyle.btnSecondary, padding: "4px 12px", fontSize: 12 }} onClick={discardDraft}>Discard changes</button>
+        </div>
+      ) : plan?.shared ? (
         <div style={{ background: C.successLight, borderRadius: 10, padding: "10px 16px",
           marginBottom: 20, fontSize: 13, color: C.success, display: "flex", justifyContent: "space-between" }}>
-          <span>✓ This plan is visible to the client</span>
+          <span>✓ The client can see this plan, and it's up to date</span>
           <span style={{ color: C.muted }}>
             Shared {plan.shared_at ? new Date(plan.shared_at).toLocaleDateString("en-AU") : ""}
           </span>
         </div>
+      ) : (
+        <div style={{ background: C.cream, borderRadius: 10, padding: "10px 16px",
+          marginBottom: 20, fontSize: 13, color: C.muted }}>
+          📝 Draft. The client can't see this plan until you press "Share with client".
+        </div>
+      )}
+      {publishMsg && (
+        <div style={{ background: C.successLight, borderRadius: 10, padding: "10px 16px",
+          marginBottom: 20, fontSize: 13, color: C.success }}>{publishMsg}</div>
       )}
 
       {/* Version history */}
@@ -7599,6 +7733,26 @@ function SleepPlanEditor({ clientId, clientData, isCoach }) {
       >
         + Add Custom Section
       </button>
+
+      {/* Bottom share controls, so she doesn't have to scroll back up after finishing */}
+      <div className="no-print" style={{ ...gStyle.card, marginBottom: 16, background: hasUnshared ? "#FFF4DC" : C.cream,
+        display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+        <div style={{ fontSize: 13, color: C.dark, flex: 1, minWidth: 220 }}>
+          {!plan?.shared
+            ? "Finished? Share the plan so the client can see it."
+            : hasUnshared
+              ? "You have changes the client can't see yet."
+              : "The client is seeing your latest version."}
+          <div style={{ fontSize: 12, color: saveError ? (C.danger) : C.muted, marginTop: 2 }}>
+            {saveError ? "⚠ Couldn't save your draft" : saving ? "Saving draft…" : "Your draft is auto-saved either way."}
+          </div>
+        </div>
+        <button
+          style={{ ...gStyle.btnPrimary, width: "auto", opacity: (!plan?.shared || hasUnshared) ? 1 : 0.5 }}
+          onClick={publishPlan} disabled={publishing || (plan?.shared && !hasUnshared)}>
+          {publishing ? "Sharing…" : plan?.shared ? "Save & share this version" : "Share with client"}
+        </button>
+      </div>
 
       <style>{`
         @media print {
