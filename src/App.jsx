@@ -23,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Shown in small print under the diary so it's easy to confirm which version a
 // device is actually running (installed web apps can hang on to an old one).
-const APP_BUILD = "4 Nov 2026 · night wakes kept inside the night";
+const APP_BUILD = "8 Nov 2026 · collapsible diary + quick buttons";
 
 // iOS's "Add to Home Screen" web apps run in standalone mode, with no Safari
 // UI around them — and window.print() silently does nothing there (no
@@ -3498,17 +3498,17 @@ function ClientApp({ session, onLogout }) {
           "Sleep Plan" ("Progress"), even though both are visually "column
           two". A CSS grid with equal-width auto-fit columns fixes that: every
           tab's cell is the same width, so every row's start/second column
-          lines up regardless of label length — and on a wide screen it still
-          fits all the tabs on one row the same as before. */}
+          lines up regardless of label length. It is a fixed two columns on
+          phones and desktops alike, with the Message / Email / Book a call
+          buttons on their own row underneath (evenly spread). */}
       <div className="no-print" style={{ background: T.white, borderBottom: `1px solid ${T.border}`, padding: "0 16px" }}>
         {/* Wrapped at the same maxWidth/centering as the content area below,
             so the action-button row's column gap can line up exactly with
             the stat-card gap underneath at any screen width, not just on the
             narrow phone widths where they'd happen to coincide anyway. */}
-        <div style={{ maxWidth: 700, margin: "0 auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
+        <div style={{ maxWidth: 700, margin: "0 auto" }}>
           <div style={{
-            display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-            gap: 2, flex: "1 1 auto", minWidth: 0,
+            display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 2,
           }}>
             {tabs.map((t) => (
               <button key={t.key} onClick={() => {
@@ -3541,7 +3541,7 @@ function ClientApp({ session, onLogout }) {
           <div style={{
             display: "grid",
             gridTemplateColumns: `repeat(${headerButtonCount}, 1fr)`,
-            gap: 10, flex: "1 1 100%", maxWidth: 460, marginLeft: "auto",
+            gap: 10, width: "100%", padding: "10px 0 12px",
           }}>
             {contact.showMessage && (
               <div style={{ display: "flex", justifyContent: "center" }}><ContactMessageButton contact={contact} /></div>
@@ -5071,6 +5071,37 @@ function DiaryQuickLog({ clientId, date, isCoach, T, night }) {
   );
 }
 
+// Collapsible card for the sleep diary. Tapping the title row opens/closes it; the
+// optional `quick` button sits beside the title and works while the card is closed.
+// `alerts` (warnings, "still going?" prompts) always show, open or closed, so nothing
+// important is hidden by collapsing. The body stays mounted when closed (just hidden),
+// so half-finished typing and pickers keep their state.
+function DiarySection({ T, title, summary, quick, alerts, open, onToggle, children }) {
+  return (
+    <div style={{ ...gStyle.card, background: T.white, borderColor: T.border }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button type="button" onClick={onToggle} aria-expanded={open} style={{
+          flex: "1 1 auto", minWidth: 0, display: "flex", alignItems: "flex-start", gap: 8,
+          background: "none", border: "none", padding: 0, margin: 0, textAlign: "left",
+          cursor: "pointer", fontFamily: font.body, color: "inherit",
+        }}>
+          <span aria-hidden="true" style={{
+            display: "inline-block", width: 14, marginTop: -1, fontSize: 22, lineHeight: "26px",
+            fontWeight: 700, color: T.muted, transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s",
+          }}>›</span>
+          <span style={{ minWidth: 0 }}>
+            <span style={{ display: "block", fontFamily: font.display, color: T.blue, fontSize: 18, fontWeight: 700, lineHeight: 1.3 }}>{title}</span>
+            {summary ? <span style={{ display: "block", fontSize: 12.5, color: T.muted, marginTop: 3, lineHeight: 1.4 }}>{summary}</span> : null}
+          </span>
+        </button>
+        {quick ? <div style={{ flexShrink: 0 }}>{quick}</div> : null}
+      </div>
+      {alerts ? <div style={{ marginTop: 2 }}>{alerts}</div> : null}
+      <div style={{ display: open ? "block" : "none", marginTop: 14 }}>{children}</div>
+    </div>
+  );
+}
+
 function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode, setThemeMode }) {
   const T = isDark ? DARK_C : C;
   const [selectedDate, setSelectedDate] = useState(today());
@@ -5108,6 +5139,11 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
   const [nowTick, setNowTick] = useState(() => getCurrentTime());
   // "Still going" answers: item id → how long it must have run before we ask again
   const [runningSnooze, setRunningSnooze] = useState({});
+  // Which diary sections are open. Everything starts closed for the client (so the day is easy
+  // to glance at); the coach sees everything open. Kept while moving between days.
+  const [openSecs, setOpenSecs] = useState({});
+  const isSecOpen = (k) => (k in openSecs ? openSecs[k] : !!isCoach);
+  const toggleSec = (k) => setOpenSecs((p) => ({ ...p, [k]: !(k in p ? p[k] : !!isCoach) }));
   useEffect(() => {
     const id = setInterval(() => setNowTick(getCurrentTime()), 30000);
     return () => clearInterval(id);
@@ -5464,24 +5500,6 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
     await doSave(updated, selectedDate);
   };
 
-  // One-tap "they've just gone down" — stamps the current time as start on
-  // the trailing nap row if it's still blank (the common case: the default
-  // first nap row hasn't been touched yet), otherwise adds a fresh row, so
-  // this never leaves an unused blank nap sitting alongside the real one.
-  const startNapNow = async () => {
-    const now = getCurrentTime();
-    const naps = [...(entry.naps || [])];
-    const last = naps[naps.length - 1];
-    if (last && !last.start && !last.end) {
-      naps[naps.length - 1] = { ...last, start: now };
-    } else {
-      naps.push({ ...emptyNap(), start: now });
-    }
-    const updated = { ...entry, naps };
-    setEntry(updated);
-    await doSave(updated, selectedDate);
-  };
-
   const removeNap = async (idx) => {
     const naps = entry.naps.filter((_, i) => i !== idx);
     const updated = { ...entry, naps };
@@ -5513,25 +5531,115 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
     await doSave(updated, selectedDate);
   };
 
-  // One-tap "they've just woken up" — works from either logging mode.
-  // Detailed mode already tracks individual wakings, so this just stamps the
-  // trailing waking row if it's still blank, otherwise adds a fresh one (same
-  // "don't leave an unused blank row behind" logic as startNapNow). Simple
-  // mode doesn't have a per-waking time field to stamp, so this switches to
-  // detailed mode first (the same way tapping "Log each waking" does) and
-  // then adds the stamped waking.
+  // After midnight the night still belongs to YESTERDAY's diary (its bedtime is on that day).
+  // When today's morning wake isn't in yet and last night's bedtime is, a night waking is
+  // written to yesterday's row instead of today's, so it counts against the right night.
+  const nightInProgressNow = () => {
+    const cur = entryRef.current || entry;
+    if (isCoach || selectedDate !== today() || cur.wake_time || !adjTimes.prevBedTime) return false;
+    const b = parseTime(String(adjTimes.prevBedTime).slice(0, 5)), n = parseTime(getCurrentTime());
+    return b !== null && n !== null && b > n && diffMins(b, n) <= NIGHT_MAX_PLAUSIBLE_MINS;
+  };
+
+  // Reads yesterday's row fresh, lets `build` return its new list of wakings (or null to
+  // cancel), and saves only the waking fields back, so nothing else on that day is touched.
+  const changePrevNightWakings = async (build) => {
+    const { data: prev } = await supabase.from("sleep_diary")
+      .select("id, bed_time, total_nap_mins, night_wakings, night_wakings_mode, night_wakings_count, night_wakings_awake_mins")
+      .eq("client_id", clientId).eq("date", offsetDate(selectedDate, -1)).maybeSingle();
+    if (!prev?.id) return false;
+    const wakings = build(prev, withItemIds(Array.isArray(prev.night_wakings) ? prev.night_wakings : [], "w"));
+    if (!wakings) return false;
+    const det = calcDetailedWakings(wakings);
+    const fig = nightFigures({ ...prev, night_wakings: wakings, night_wakings_mode: "detailed" }, null);
+    const { error } = await supabase.from("sleep_diary").update({
+      night_wakings: wakings,
+      night_wakings_mode: "detailed",
+      night_wakings_count: det.count,
+      night_wakings_awake_mins: fig.awake || null,
+    }).eq("id", prev.id);
+    if (error) { console.error("Night waking save error:", error); return false; }
+    setAdjTimes((p) => ({ ...p, prevWakings: wakings, prevWakingsMode: "detailed" }));
+    return true;
+  };
+
+  const QUICK_TOTALS_WARNING = "This night already has quick totals for night wakes. Logging a waking by time switches the night to \"Log each waking\" and replaces those totals. Continue?";
+
+  // One-tap "they've just woken up" overnight — works from either logging mode.
+  // Detailed mode already tracks individual wakings, so this stamps the trailing waking row
+  // if it's still blank, otherwise adds a fresh one. Simple mode has no per-waking times, so
+  // this switches to detailed mode first (the same as tapping "Log each waking"). That switch
+  // would wipe any quick totals already typed in, so it asks before doing so.
   const logWakingNow = async () => {
     const now = getCurrentTime();
-    const night_wakings = [...(entry.night_wakings || [])];
-    const last = night_wakings[night_wakings.length - 1];
-    if (last && !last.woke_at && !last.back_asleep_at) {
-      night_wakings[night_wakings.length - 1] = { ...last, woke_at: now };
-    } else {
-      night_wakings.push({ ...emptyWaking(), woke_at: now });
+    const addTo = (list) => {
+      const out = [...list];
+      const last = out[out.length - 1];
+      if (last && !last.woke_at && !last.back_asleep_at) out[out.length - 1] = { ...last, woke_at: now };
+      else out.push({ ...emptyWaking(), woke_at: now });
+      return out;
+    };
+    const quickTotals = (r) => (r.night_wakings_mode || "simple") !== "detailed" &&
+      ((parseInt(r.night_wakings_count, 10) || 0) > 0 || (parseInt(r.night_wakings_awake_mins, 10) || 0) > 0);
+    if (nightInProgressNow()) {
+      await changePrevNightWakings((prev, list) => {
+        if (quickTotals(prev) && !window.confirm(QUICK_TOTALS_WARNING)) return null;
+        return addTo(list);
+      });
+      return;
     }
-    const updated = entry.night_wakings_mode === "detailed"
-      ? { ...entry, night_wakings }
-      : { ...entry, night_wakings_mode: "detailed", night_wakings_count: "", night_wakings_awake_mins: "", night_wakings };
+    const cur = entryRef.current || entry;
+    if (quickTotals(cur) && !window.confirm(QUICK_TOTALS_WARNING)) return;
+    const night_wakings = addTo(cur.night_wakings || []);
+    const updated = cur.night_wakings_mode === "detailed"
+      ? { ...cur, night_wakings }
+      : { ...cur, night_wakings_mode: "detailed", night_wakings_count: "", night_wakings_awake_mins: "", night_wakings };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
+  };
+
+  // Sets the "back asleep" time on one waking of last night (when a prompt on today's screen is answered)
+  const setPrevWakingEnd = async (idx, value) => {
+    await changePrevNightWakings((prev, list) =>
+      list.map((w, i) => (i === idx ? { ...w, back_asleep_at: value } : w)));
+  };
+
+  // "Back asleep now": fills the back-asleep time of the most recent waking that has no end yet.
+  // It only ever fills an empty box, and does nothing if there isn't an open waking.
+  const backAsleepNow = async () => {
+    const stamp = (list) => {
+      const wakes = [...list];
+      for (let i = wakes.length - 1; i >= 0; i--) {
+        if (wakes[i].woke_at && !wakes[i].back_asleep_at) {
+          wakes[i] = { ...wakes[i], back_asleep_at: getCurrentTime() };
+          return wakes;
+        }
+      }
+      return null;
+    };
+    if (nightInProgressNow()) { await changePrevNightWakings((prev, list) => stamp(list)); return; }
+    const cur = entryRef.current || entry;
+    const night_wakings = stamp(cur.night_wakings || []);
+    if (!night_wakings) return;
+    const updated = { ...cur, night_wakings };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
+  };
+
+  // Morning "woke up now" and bedtime "fell asleep now". Each only fills an EMPTY box, checked
+  // against the freshest copy of the day (so a time just entered on another device is kept).
+  const wakeUpNow = async () => {
+    const cur = entryRef.current || entry;
+    if (cur.wake_time) return;
+    const updated = { ...cur, wake_time: getCurrentTime() };
+    setEntry(updated);
+    await doSave(updated, selectedDate);
+  };
+
+  const fellAsleepNow = async () => {
+    const cur = entryRef.current || entry;
+    if (cur.bed_time) return;
+    const updated = { ...cur, bed_time: getCurrentTime() };
     setEntry(updated);
     await doSave(updated, selectedDate);
   };
@@ -5622,7 +5730,7 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
   // Night sleep = "Time went to sleep" (this day) → wake time (next day), minus time awake overnight.
   // ("Time into bed" is just for interest and is never used in the sum.) If it can't be shown, say what's missing.
   const nightMissingHint = !entry.bed_time
-    ? 'Add "Time went to sleep" above'
+    ? 'Add "Time went to sleep" below'
     : !adjTimes.nextWakeTime
       ? "Shows once tomorrow's wake time is added"
       : hasWakeProblem
@@ -5642,6 +5750,72 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
     }
     return { count, awakeMins, notes: (entry.notes || "").trim() };
   })();
+  // ── Quick-button / header helpers ───────────────────────────────────────
+  const todayStr = today();
+  const isLiveToday = !isCoach && selectedDate === todayStr;
+  // The night carries over midnight, so overnight buttons also work on "yesterday"
+  const isLiveNight = !isCoach && (selectedDate === todayStr || selectedDate === offsetDate(todayStr, -1));
+  // Live "asleep so far" counter: from "Time went to sleep" until tomorrow's wake time is logged
+  const bedLive = (() => {
+    if (!entry.bed_time || adjTimes.nextWakeTime) return null;
+    if (selectedDate !== todayStr && selectedDate !== offsetDate(todayStr, -1)) return null;
+    const bedM = parseTime(entry.bed_time), nowM = parseTime(nowTick);
+    if (bedM === null || nowM === null) return null;
+    if (selectedDate === todayStr && bedM > nowM) return null;  // bedtime hasn't happened yet today
+    if (selectedDate !== todayStr && bedM <= nowM) return null; // yesterday's bedtime is only "live" once the clock has passed midnight
+    const el = diffMins(bedM, nowM);
+    return el <= NIGHT_MAX_PLAUSIBLE_MINS ? el : null;
+  })();
+  // After midnight, before this morning's wake is logged, the Night Wakes card shows (and the quick
+  // buttons act on) LAST night, which lives on yesterday's diary.
+  const nightInProgress = nightInProgressNow();
+  const nwList = nightInProgress
+    ? (adjTimes.prevWakingsMode === "detailed" && Array.isArray(adjTimes.prevWakings) ? withItemIds(adjTimes.prevWakings, "w") : [])
+    : (entry.night_wakings || []);
+  const nwMode = nightInProgress ? adjTimes.prevWakingsMode : wakingMode;
+  const nwTotals = calcDetailedWakings(nwList);
+  const openWakeIdx = (() => {
+    const w = nwList;
+    for (let i = w.length - 1; i >= 0; i--) if (w[i].woke_at && !w[i].back_asleep_at) return i;
+    return -1;
+  })();
+  const openWake = openWakeIdx >= 0 ? nwList[openWakeIdx] : null;
+  const openWakeCheck = openWake ? runningCheck("waking", openWake.woke_at, openWake.id) : null;
+  const openWakeLive = openWake && !openWakeCheck
+    ? diffMins(parseTime(openWake.woke_at), parseTime(nowTick)) : null;
+  // "Still going?" prompts for wakes that have run long — shown on the card even while it's closed
+  const wakeNotices = nwList.map((w, idx) => (
+    (w.woke_at && !w.back_asleep_at)
+      ? <div key={w.id || idx}>{runningNotice("waking", w, w.woke_at, "back_asleep_at",
+          (v) => (nightInProgress ? setPrevWakingEnd(idx, v) : updateWaking(idx, "back_asleep_at", v)))}</div>
+      : null
+  ));
+  const hasWakeNotice = nwList.some((w) => w.woke_at && !w.back_asleep_at && runningCheck("waking", w.woke_at, w.id));
+  const wakeFlagCount = nwList.filter((w) => implausibleDuration(w.woke_at, w.back_asleep_at, WAKING_MAX_PLAUSIBLE_MINS)).length;
+  const amber = "#B7791F";
+  const nightWakeSummary = (() => {
+    const bits = [];
+    if (nwMode === "detailed") {
+      if (nwTotals.count > 0) {
+        bits.push(`${nwTotals.count} waking${nwTotals.count !== 1 ? "s" : ""} · ${fmtDuration(nwTotals.mins)} awake`);
+      }
+    } else if (!nightInProgress) {
+      const n = parseInt(entry.night_wakings_count, 10);
+      const aw = parseInt(entry.night_wakings_awake_mins, 10);
+      if (!Number.isNaN(n)) bits.push(`${n} wake${n !== 1 ? "s" : ""}${aw ? ` · ${fmtDuration(aw)} awake` : ""}`);
+      else if (aw) bits.push(`${fmtDuration(aw)} awake`);
+    }
+    if (!bits.length) bits.push("None logged yet");
+    return (
+      <>
+        {nightInProgress ? "Last night: " : ""}{bits.join(" · ")}
+        {openWakeLive !== null && <span style={{ color: T.blue }}> · 👀 Awake now — {fmtDuration(openWakeLive)} so far</span>}
+        {hasWakeNotice && <span style={{ color: amber }}> · ⏰ still going?</span>}
+        {wakeFlagCount > 0 && <span style={{ color: amber }}> · ⚠️ check times</span>}
+      </>
+    );
+  })();
+  const quickBtn = { ...gStyle.btnPrimary, width: "auto", padding: "8px 12px", fontSize: 12, whiteSpace: "nowrap" };
   const bookingUnlocked = !isCoach && !consultBooked && diaryCount >= DIARY_DAYS_REQUIRED;
   const daysRemaining = Math.max(0, DIARY_DAYS_REQUIRED - diaryCount);
 
@@ -5768,8 +5942,13 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
         })}
       </div>
 
-      {/* Calculations summary */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10, marginBottom: 20 }}>
+      {/* Calculations summary — collapsed to one glanceable line */}
+      <DiarySection T={T} title="Today's Summary"
+        summary={(totalNapMins || nightSleepMins)
+          ? `Total ${fmtDuration(total24h)} · Naps ${fmtDuration(totalNapMins)} · Night ${nightSleepMins ? fmtDuration(nightSleepMins) : "—"}`
+          : "Nothing to total yet"}
+        open={isSecOpen("summary")} onToggle={() => toggleSec("summary")}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10, marginBottom: 0 }}>
         {[
           { label: "Total nap sleep", value: fmtDuration(totalNapMins) },
           { label: "Tonight's sleep", value: nightSleepMins ? fmtDuration(nightSleepMins) : nightMissingHint },
@@ -5782,12 +5961,13 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
           </div>
         ))}
       </div>
+      </DiarySection>
 
       {/* Night wakes that look wrong for this night (never stopped / run past the morning wake / outside the night) */}
       {hasWakeProblem && (
         <div style={{
           background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
-          padding: "10px 12px", marginTop: -8, marginBottom: 20, fontSize: 12.5, color: "#6B4A1F", lineHeight: 1.45,
+          padding: "10px 12px", marginTop: 0, marginBottom: 16, fontSize: 12.5, color: "#6B4A1F", lineHeight: 1.45,
         }}>
           <strong>⚠️ A night wake looks off, so check its "back asleep" time.</strong>
           <div style={{ marginTop: 4 }}>
@@ -5824,11 +6004,11 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
       )}
 
       {/* Wake time */}
-      <div style={{ ...gStyle.card, background: T.white, borderColor: T.border }}>
-        <h3 style={{ fontFamily: font.display, color: T.blue, margin: "0 0 4px" }}>Morning Wake</h3>
-        <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>Enter times in 24hr format — e.g. 07:00, 13:30, 19:45</p>
-        <label style={{ ...gStyle.label, color: T.mid }}>Wake time</label>
-        <TimeSelect dark={isDark} value={entry.wake_time} onChange={(v) => update("wake_time", v)} disabled={isCoach} placeholder="Select wake time…" />
+      <DiarySection T={T} title="Morning Wake"
+        summary={entry.wake_time ? `Woke at ${to12hLabel(entry.wake_time)}` : "Not logged yet"}
+        quick={isLiveToday && !entry.wake_time
+          ? <button type="button" style={quickBtn} onClick={wakeUpNow}>☀️ Woke up now</button> : null}
+        alerts={<>
         {wakeFlag && (
           <div style={{
             background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
@@ -5877,22 +6057,19 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
             )}
           </div>
         )}
-      </div>
+        </>}
+        open={isSecOpen("wake")} onToggle={() => toggleSec("wake")}>
+        <p style={{ fontSize: 11, color: T.muted, marginBottom: 12 }}>Enter times in 24hr format — e.g. 07:00, 13:30, 19:45</p>
+        <label style={{ ...gStyle.label, color: T.mid }}>Wake time</label>
+        <TimeSelect dark={isDark} value={entry.wake_time} onChange={(v) => update("wake_time", v)} disabled={isCoach} placeholder="Select wake time…" />
+      </DiarySection>
 
       {/* Naps */}
       <div style={{ ...gStyle.card, background: T.white, borderColor: T.border }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <h3 style={{ fontFamily: font.display, color: T.blue, margin: 0 }}>Naps</h3>
           {!isCoach && (
-            <div style={{ display: "flex", gap: 6 }}>
-              <button
-                style={{ ...gStyle.btnPrimary, width: "auto", padding: "6px 12px", fontSize: 12 }}
-                onClick={startNapNow}
-              >
-                ▶ Start nap now
-              </button>
-              <button style={{ ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12 }} onClick={addNap}>+ Add nap</button>
-            </div>
+            <button style={{ ...gStyle.btnSecondary, padding: "6px 12px", fontSize: 12 }} onClick={addNap}>+ Add nap</button>
           )}
         </div>
         {(entry.naps || []).map((nap, idx) => {
@@ -6032,45 +6209,28 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
       </div>
 
       {/* Daytime behaviour */}
-      <div style={{ ...gStyle.card, background: T.white, borderColor: T.border }}>
-        <h3 style={{ fontFamily: font.display, color: T.blue, margin: "0 0 8px" }}>Daytime Behaviour & Activities</h3>
+      <DiarySection T={T} title="Daytime Behaviour & Activities"
+        summary={(() => {
+          const dn = (entry.daytime_notes || "").trim();
+          return dn ? (dn.length > 60 ? dn.slice(0, 60).trim() + "…" : dn) : "Nothing added yet";
+        })()}
+        open={isSecOpen("day")} onToggle={() => toggleSec("day")}>
         <p style={{ fontSize: 12, color: T.muted, marginBottom: 12 }}>e.g. nursery/kindy, home all day, multiple meltdowns, good mood, teething, unwell...</p>
         <SuggestField dark={isDark} value={entry.daytime_notes} suggestions={suggestionPools.daytimeNotes} minHeight={80}
           placeholder="Notes about the day..."
           onChange={(v) => update("daytime_notes", v)} disabled={isCoach} />
-      </div>
+      </DiarySection>
 
       {/* Bedtime */}
-      <div style={{ ...gStyle.card, background: T.white, borderColor: T.border }}>
-        <h3 style={{ fontFamily: font.display, color: T.blue, margin: "0 0 16px" }}>Bedtime</h3>
-        {(() => {
-          const lastNapEnd = [...(entry.naps || [])].reverse().find(n => n.end)?.end;
-          const wwToBed = lastNapEnd && entry.bed_time
-            ? diffMins(parseTime(lastNapEnd), parseTime(entry.bed_time)) : null;
-          const wwFromWake = !lastNapEnd && entry.wake_time && entry.bed_time
-            ? diffMins(parseTime(entry.wake_time), parseTime(entry.bed_time)) : null;
-          return (wwToBed || wwFromWake) ? (
-            <p style={{ fontSize: 12, color: T.gold, marginBottom: 12 }}>
-              ⏱ Wake window to bed: {fmtDuration(wwToBed ?? wwFromWake)}
-            </p>
-          ) : null;
-        })()}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-          <div>
-            <label style={{ ...gStyle.label, color: T.mid }}>Bedtime routine started</label>
-            <TimeSelect dark={isDark} value={entry.routine_start_time} onChange={(v) => update("routine_start_time", v)} disabled={isCoach} placeholder="Select time…" />
-          </div>
-          <div>
-            <label style={{ ...gStyle.label, color: T.mid }}>Time into bed <span style={{ fontWeight: 400, opacity: 0.75 }}>(optional)</span></label>
-            <TimeSelect dark={isDark} value={entry.into_bed_time} onChange={(v) => update("into_bed_time", v)} disabled={isCoach} placeholder="Select time…" />
-          </div>
-        </div>
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ ...gStyle.label, color: T.mid }}>Time went to sleep</label>
-          <div style={{ fontSize: 11, color: T.muted, margin: "-2px 0 6px" }}>
-            Night sleep is worked out from this time to tomorrow's wake time, minus time awake overnight.
-          </div>
-          <TimeSelect dark={isDark} value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
+      <DiarySection T={T} title="Bedtime"
+        summary={<>
+          {entry.bed_time ? `Asleep at ${to12hLabel(entry.bed_time)}` : "Not logged yet"}
+          {bedLive !== null && <span style={{ color: T.blue }}> · 😴 {fmtDuration(bedLive)} so far</span>}
+        </>}
+        quick={isLiveToday && !entry.bed_time
+          ? <button type="button" style={quickBtn} onClick={fellAsleepNow}>😴 Fell asleep now</button> : null}
+        alerts={bedFlag ? (
+          <>
           {bedFlag && (
             <div style={{
               background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
@@ -6099,6 +6259,42 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
               )}
             </div>
           )}
+          </>
+        ) : null}
+        open={isSecOpen("bed")} onToggle={() => toggleSec("bed")}>
+        {(() => {
+          const lastNapEnd = [...(entry.naps || [])].reverse().find(n => n.end)?.end;
+          const wwToBed = lastNapEnd && entry.bed_time
+            ? diffMins(parseTime(lastNapEnd), parseTime(entry.bed_time)) : null;
+          const wwFromWake = !lastNapEnd && entry.wake_time && entry.bed_time
+            ? diffMins(parseTime(entry.wake_time), parseTime(entry.bed_time)) : null;
+          return (wwToBed || wwFromWake) ? (
+            <p style={{ fontSize: 12, color: T.gold, marginBottom: 12 }}>
+              ⏱ Wake window to bed: {fmtDuration(wwToBed ?? wwFromWake)}
+            </p>
+          ) : null;
+        })()}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+          <div>
+            <label style={{ ...gStyle.label, color: T.mid }}>Bedtime routine started</label>
+            <TimeSelect dark={isDark} value={entry.routine_start_time} onChange={(v) => update("routine_start_time", v)} disabled={isCoach} placeholder="Select time…" />
+          </div>
+          <div>
+            <label style={{ ...gStyle.label, color: T.mid }}>Time into bed <span style={{ fontWeight: 400, opacity: 0.75 }}>(optional)</span></label>
+            <TimeSelect dark={isDark} value={entry.into_bed_time} onChange={(v) => update("into_bed_time", v)} disabled={isCoach} placeholder="Select time…" />
+          </div>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ ...gStyle.label, color: T.mid }}>Time went to sleep</label>
+          <div style={{ fontSize: 11, color: T.muted, margin: "-2px 0 6px" }}>
+            Night sleep is worked out from this time to tomorrow's wake time, minus time awake overnight.
+          </div>
+          <TimeSelect dark={isDark} value={entry.bed_time} onChange={(v) => update("bed_time", v)} disabled={isCoach} placeholder="Select time…" />
+          {bedLive !== null && (
+            <p style={{ fontSize: 12, color: T.blue, marginTop: 8, marginBottom: 0 }}>
+              😴 Asleep now — {fmtDuration(bedLive)} so far
+            </p>
+          )}
         </div>
         <div style={{ marginBottom: 12 }}>
           <label style={{ ...gStyle.label, color: T.mid }}>How did they fall asleep?</label>
@@ -6106,8 +6302,36 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
             placeholder="e.g. fed to sleep, rocked, independently, with dummy..."
             onChange={(v) => update("bedtime_how_fell_asleep", v)} disabled={isCoach} />
         </div>
+        <label style={{ ...gStyle.label, color: T.mid }}>General notes</label>
+        <SuggestField dark={isDark} value={entry.notes} suggestions={suggestionPools.generalNotes} minHeight={80}
+          placeholder="How was settling? Anything else to note..."
+          onChange={(v) => update("notes", v)} disabled={isCoach} />
+      </DiarySection>
+
+      {/* Night wakes — its own card, with quick buttons that work while it's closed */}
+      <DiarySection T={T} title="Night Wakes"
+        summary={nightWakeSummary}
+        quick={isLiveNight && !(openWake && openWakeCheck && openWakeCheck.stale)
+          ? (openWake
+              ? <button type="button" style={quickBtn} onClick={backAsleepNow}>💤 Back asleep now</button>
+              : <button type="button" style={quickBtn} onClick={logWakingNow}>🌙 Log waking now</button>)
+          : null}
+        alerts={hasWakeNotice ? <>{wakeNotices}</> : null}
+        open={isSecOpen("wakes")} onToggle={() => toggleSec("wakes")}>
+        {nightInProgress ? (
+          <div>
+            <p style={{ fontSize: 13, color: T.mid, lineHeight: 1.5, margin: "0 0 10px" }}>
+              It's still last night, so wakings you log now go on yesterday's diary, where this night's sleep is counted.
+              {nwTotals.count > 0 ? ` So far: ${nwTotals.count} waking${nwTotals.count !== 1 ? "s" : ""}.` : ""}
+            </p>
+            <button type="button" style={{ ...gStyle.btnSecondary, padding: "8px 14px", fontSize: 13 }}
+              onClick={() => changeDate(-1)}>
+              Open yesterday's diary to see or edit them
+            </button>
+          </div>
+        ) : (
+          <>
         <div style={{ marginBottom: 12 }}>
-          <label style={{ ...gStyle.label, color: T.mid }}>Times woke overnight</label>
 
           {/* Mode toggle — only one method's fields are ever active/saved at once */}
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -6133,14 +6357,6 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
               }}>
               Log each waking
             </button>
-            {!isCoach && (
-              <button
-                onClick={logWakingNow}
-                style={{ ...gStyle.btnPrimary, width: "auto", padding: "6px 12px", fontSize: 12, marginLeft: "auto" }}
-              >
-                🌙 Log waking now
-              </button>
-            )}
           </div>
 
           {wakingMode === "simple" ? (
@@ -6217,7 +6433,6 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
                         👀 Awake now — {fmtDuration(diffMins(parseTime(w.woke_at), parseTime(nowTick)))} so far
                       </p>
                     )}
-                    {w.woke_at && !w.back_asleep_at && runningNotice("waking", w, w.woke_at, "back_asleep_at", (v) => updateWaking(idx, "back_asleep_at", v))}
                     {wakeFlag && (
                       <div style={{
                         background: "#FDF3E3", border: "1px solid #E0B96A", borderRadius: 8,
@@ -6269,11 +6484,9 @@ function SleepDiaryViewer({ clientId, isCoach, consultBooked, isDark, themeMode,
             </div>
           )}
         </div>
-        <label style={{ ...gStyle.label, color: T.mid }}>General notes</label>
-        <SuggestField dark={isDark} value={entry.notes} suggestions={suggestionPools.generalNotes} minHeight={80}
-          placeholder="How was settling? Anything else to note..."
-          onChange={(v) => update("notes", v)} disabled={isCoach} />
-      </div>
+          </>
+        )}
+      </DiarySection>
 
       <DiaryQuickLog clientId={clientId} date={selectedDate} isCoach={isCoach} T={T} night={nightSummary} />
 
@@ -6406,35 +6619,24 @@ function SleepAnalysis({ client, isCoach }) {
   );
 
   // ── Compute metrics per day ──────────────────────────────
-  // Option B: For analysis, calculate night sleep using BACKWARD direction
-  // (prev bed → current wake) so every day from Day 2 has complete data.
-  // This gives better averages — only Day 1 is incomplete, not the last day.
-  // The diary display uses forward direction (bed → next wake) for client clarity.
+  // Each row is one DIARY DAY, the same as the Sleep Diary: that day's naps plus the night that
+  // starts at that day's bedtime ("Tonight's sleep" in the diary). The night is finished off by
+  // the NEXT calendar day's wake time, so the newest day shows no night sleep (and is left out of
+  // the averages) until the following morning's wake time has been logged.
+  // Night wakings are counted on the same row, so a row's night sleep and wakes are the same night.
 
   const days = entries.map((e, idx) => {
     const napMins = e.total_nap_mins || 0;
     const napCount = Array.isArray(e.naps) ? e.naps.filter(n => n.start && n.end).length : 0;
 
-    // Option B: backward night sleep calc (prev bed → today wake) for analysis accuracy
-    // The night belongs to the PREVIOUS CALENDAR DAY. (Using "the previous row" would mis-pair
-    // nights whenever a day has no entry, e.g. a client skipped logging for a day.)
-    const prevEntry = entries.find((x) => x.date === offsetDate(e.date, -1)) || null;
-    const rawBackwardNightMins = prevEntry?.bed_time && e.wake_time
-      ? calcNightSleep(prevEntry.bed_time, e.wake_time)
-      : null;
-    // The "awake overnight" duration is logged on the night it belongs to (prevEntry's date)
-    // Detailed wakes are counted only inside the night (see calcNightAwake), so a wake that was never
-    // stopped can't swallow the whole night. A night that works out to nothing is treated as missing, not 0.
-    const prevAwakeMins = !prevEntry ? 0
-      : prevEntry.night_wakings_mode === "detailed"
-        ? calcNightAwake(prevEntry.night_wakings, prevEntry.bed_time, e.wake_time).mins
-        : (parseInt(prevEntry.night_wakings_awake_mins) || 0);
-    const backwardNightMins = rawBackwardNightMins !== null && rawBackwardNightMins - prevAwakeMins > 0
-      ? rawBackwardNightMins - prevAwakeMins
-      : null;
+    // Night = this day's bedtime -> the next calendar day's wake time, less awake time inside the
+    // night (worked out exactly as the diary's "Tonight's sleep" does). Matching on the next
+    // CALENDAR DAY, not "the next row", stops nights being mis-paired when a day has no entry.
+    // A night that works out to nothing is treated as missing, not 0.
+    const nextEntry = entries.find((x) => x.date === offsetDate(e.date, 1)) || null;
+    const backwardNightMins = nextEntry ? nightFigures(e, nextEntry.wake_time).night : null;
 
-    // Option D: only include total if we have BOTH nap and night data
-    // Use backward night sleep for analysis totals
+    // Only include a total if we have BOTH nap and night data
     const totalMins = backwardNightMins !== null
       ? napMins + backwardNightMins
       : null; // null = incomplete, excluded from averages
@@ -6465,13 +6667,12 @@ function SleepAnalysis({ client, isCoach }) {
     const detailedOf = (x) => (x && x.night_wakings_mode === "detailed" && Array.isArray(x.night_wakings))
       ? calcDetailedWakings(x.night_wakings) : null;
     const ownWakes = detailedOf(e);
-    const prevWakes = detailedOf(prevEntry);
     const nightWakings = ownWakes
       ? ownWakes.count
       : (e.night_wakings_count !== null && e.night_wakings_count !== ""
         ? parseInt(e.night_wakings_count) : null);
     const openWakes = ownWakes ? ownWakes.open : 0;            // unfinished wakes logged on this date
-    const nightOpenWakes = prevWakes ? prevWakes.open : 0;      // unfinished wakes behind this row's "Night Sleep"
+    const nightOpenWakes = ownWakes ? ownWakes.open : 0;        // unfinished wakes behind this row's "Night Sleep"
     const wakeTime = e.wake_time || null;
     const bedTime = e.bed_time || null;
 
@@ -7141,7 +7342,7 @@ function SleepAnalysis({ client, isCoach }) {
                   <td style={{ padding: "8px 10px", color: C.blue }}>{fmtDuration(d.napMins)}</td>
                   <td style={{ padding: "8px 10px", color: C.terracotta }}>
                     {fmtDuration(d.nightMins)}
-                    {d.nightOpenWakes > 0 && <span title={`${d.nightOpenWakes} night wake${d.nightOpenWakes !== 1 ? "s" : ""} from the night before ${d.nightOpenWakes !== 1 ? "have" : "has"} no "back asleep" time, so this may be slightly overstated`} style={{ color: "#B7791F", fontWeight: 700 }}> *</span>}
+                    {d.nightOpenWakes > 0 && <span title={`${d.nightOpenWakes} night wake${d.nightOpenWakes !== 1 ? "s" : ""} from this night ${d.nightOpenWakes !== 1 ? "have" : "has"} no "back asleep" time, so this may be slightly overstated`} style={{ color: "#B7791F", fontWeight: 700 }}> *</span>}
                   </td>
                   <td style={{ padding: "8px 10px", color: C.gold, fontWeight: 600 }}>{fmtDuration(d.totalMins)}</td>
                   <td style={{ padding: "8px 10px", color: C.mid }}>{d.avgWW ? fmtDuration(d.avgWW) : "—"}</td>
